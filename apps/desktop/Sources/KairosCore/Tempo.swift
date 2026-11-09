@@ -21,6 +21,32 @@ public enum TempoEvent: Equatable {
     case stopped
 }
 
+/// A strict focus phase that was running when Kairos quit, to pick up at launch.
+public struct StrictResume: Equatable, Sendable {
+    public var startedAt: Date
+    public var endsAt: Date
+    public init(startedAt: Date, endsAt: Date) { self.startedAt = startedAt; self.endsAt = endsAt }
+}
+
+/// What Kairos asks before a strict focus phase starts, naming when it ends.
+public struct StrictConfirmation: Equatable, Sendable {
+    public let title: String
+    public let message: String
+
+    public init(minutes: Int, endsAt: Date, locale: Locale = .current, timeZone: TimeZone = .current) {
+        let f = DateFormatter()
+        f.locale = locale
+        f.timeZone = timeZone
+        f.dateStyle = .none
+        f.timeStyle = .short
+        let time = f.string(from: endsAt)
+        title = "Start strict focus until \(time)?"
+        message = "For the next \(minutes) minutes, until \(time), this session cannot be stopped, skipped or quit, "
+            + "and there are no \u{201C}Allow\u{201D} overrides. Blocked apps are hidden and blocked sites stay blocked, "
+            + "even if Kairos is closed or the Mac restarts."
+    }
+}
+
 /// Pomodoro state machine. Time is stored as `endsAt`, never as a ticking counter, so sleep
 /// and lid-close cannot make it drift.
 public struct TempoEngine: Equatable, Sendable {
@@ -92,6 +118,24 @@ public struct TempoEngine: Equatable, Sendable {
         events.append(.started(phase: newPhase))
         return events
     }
+
+    /// Picks up a strict focus phase saved before a quit. It holds strict, as a hand-picked
+    /// Strict does, because the launch cannot tell which of the two started it.
+    public mutating func resumeStrict(_ saved: StrictResume) {
+        takePendingPreset()
+        phase = .focus
+        startedAt = saved.startedAt
+        endsAt = saved.endsAt
+        total = max(0, saved.endsAt.timeIntervalSince(saved.startedAt))
+        pausedRemaining = nil
+        pausedAt = nil
+        interruptions = 0
+        focusCount = 0
+        holdsStrict = true
+    }
+
+    /// Whether the next focus phase of a running timer is strict, as a skip out of a break starts it.
+    public var nextFocusIsStrict: Bool { holdsStrict || (pendingPreset ?? preset).strict }
 
     /// A phase that has run out has nothing left to pause; the next tick ends it.
     public mutating func pause(now: Date) {

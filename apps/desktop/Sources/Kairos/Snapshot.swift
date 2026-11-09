@@ -116,6 +116,15 @@ enum Snapshot {
         model.notice = BlockNotice(kind: .rest, title: "Short break", detail: "Step away from the screen.")
         shot("overlay-rest", size: CGSize(width: 900, height: 600), OverlayView().background(Wallpaper()))
 
+        let confirm = StrictConfirmation(minutes: 50, endsAt: Date().addingTimeInterval(50 * 60))
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = confirm.title
+        alert.informativeText = confirm.message
+        alert.addButton(withTitle: "Start Strict Focus")
+        alert.addButton(withTitle: "Cancel")
+        log.append(renderAlert(alert, to: dir.appendingPathComponent("alert-strict-confirm.png")))
+
         try? (log.joined(separator: "\n") + "\n").write(to: dir.appendingPathComponent("index.txt"), atomically: true, encoding: .utf8)
         print(log.joined(separator: "\n"))
         print("Wrote \(log.count) snapshots to \(dir.path)")
@@ -172,6 +181,35 @@ enum Snapshot {
         window.contentView = nil
         window.close()
         return (CGSize(width: rep.pixelsWide, height: rep.pixelsHigh), focus)
+    }
+
+    /// An NSAlert as the app shows it, laid out but never run.
+    private static func renderAlert(_ alert: NSAlert, to url: URL) -> String {
+        alert.window.appearance = NSApp.appearance
+        alert.layout()
+        guard let view = alert.window.contentView, let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else {
+            return "\(url.lastPathComponent) failed"
+        }
+        alert.window.setFrameOrigin(NSPoint(x: -30000, y: -30000))
+        alert.window.orderFront(nil)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.2))
+        view.cacheDisplay(in: view.bounds, to: rep)
+        alert.window.orderOut(nil)
+        let image = NSImage(size: view.bounds.size)
+        image.addRepresentation(rep)
+        let out = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: rep.pixelsWide, pixelsHigh: rep.pixelsHigh, bitsPerSample: 8,
+                                   samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
+        out.size = view.bounds.size
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: out)
+        alert.window.appearance?.performAsCurrentDrawingAppearance {
+            NSColor.windowBackgroundColor.setFill()
+            view.bounds.fill()
+        }
+        image.draw(in: view.bounds)
+        NSGraphicsContext.restoreGraphicsState()
+        try? out.representation(using: .png, properties: [:])?.write(to: url)
+        return "\(url.lastPathComponent) \(rep.pixelsWide)x\(rep.pixelsHigh)"
     }
 
     private static func sample() -> AppData {

@@ -40,6 +40,11 @@ struct KairosApp: App {
                 .frame(minWidth: 860, minHeight: 560)
         }
         .defaultSize(width: 1000, height: 660)
+        .commands {
+            CommandGroup(replacing: .appTermination) {
+                QuitButton().environmentObject(model)
+            }
+        }
 
         MenuBarExtra {
             MenuBarMenu().environmentObject(model)
@@ -77,11 +82,11 @@ struct MenuBarMenu: View {
         }
         Divider()
         if model.tempo.phase == .idle {
-            Button("Start focus") { model.startFocus() }.keyboardShortcut(.space, modifiers: [.option, .shift])
+            Button("Start focus") { model.requestStartFocus() }.keyboardShortcut(.space, modifiers: [.option, .shift])
         } else {
             Text("\(model.tempo.phase.label) · \(clock(model.remaining))")
             Button(model.tempo.isPaused ? "Resume" : "Pause") { model.toggleTimer() }.keyboardShortcut(.space, modifiers: [.option, .shift])
-            Button("Skip") { model.skipPhase() }.disabled(model.strictLocked)
+            Button("Skip") { model.requestSkip() }.disabled(model.strictLocked)
             Button("+5 min") { model.addFiveMinutes() }
             Button("Stop") { model.stopTimer() }.disabled(model.strictLocked)
         }
@@ -106,7 +111,19 @@ struct MenuBarMenu: View {
         }
         Toggle("Show Kairos Bar", isOn: $model.data.settings.dockVisible)
         Divider()
-        Button("Quit Kairos") { NSApp.terminate(nil) }.keyboardShortcut("q")
+        QuitButton()
+    }
+}
+
+/// Quit is off while a strict focus phase is locked; the reason shows where the button was.
+struct QuitButton: View {
+    @EnvironmentObject var model: AppModel
+
+    var body: some View {
+        if model.strictLocked, let until = model.data.focus.strictUntil {
+            Text("Strict until \(until.formatted(date: .omitted, time: .shortened)): Kairos can\u{2019}t be quit")
+        }
+        Button("Quit Kairos") { NSApp.terminate(nil) }.keyboardShortcut("q").disabled(model.strictLocked)
     }
 }
 
@@ -135,6 +152,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         dock = DockPanelController(model: model)
         quickAdd = QuickAddPanelController(model: model)
         overlay = OverlayController(model: model)
+        model.confirmStrict = { confirmation in
+            NSApp.activate(ignoringOtherApps: true)
+            let alert = NSAlert()
+            alert.alertStyle = .warning
+            alert.messageText = confirmation.title
+            alert.informativeText = confirmation.message
+            alert.addButton(withTitle: "Start Strict Focus")
+            alert.addButton(withTitle: "Cancel")
+            return alert.runModal() == .alertFirstButtonReturn
+        }
         registerHotKeys(groups: model.data.settings.groupHotkeys)
 
         model.$data.map(\.settings.groupHotkeys).removeDuplicates().dropFirst()
@@ -163,6 +190,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         pendingHotKeys = work
         let sent = Spaces.switchTo(number)
         DispatchQueue.main.asyncAfter(deadline: .now() + (sent ? 0.35 : 0), execute: work)
+    }
+
+    /// A strict focus phase cannot be quit. Logging out, restarting or shutting down still
+    /// quits, because refusing would hold up the Mac; the phase resumes at the next launch.
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard AppModel.shared.strictLocked, !Self.systemIsQuitting else { return .terminateNow }
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.messageText = "Strict focus is on"
+        let until = AppModel.shared.data.focus.strictUntil?.formatted(date: .omitted, time: .shortened) ?? "the session ends"
+        alert.informativeText = "Kairos can\u{2019}t be quit until \(until), when this strict session ends."
+        alert.runModal()
+        return .terminateCancel
+    }
+
+    private static var systemIsQuitting: Bool {
+        guard let event = NSAppleEventManager.shared().currentAppleEvent,
+              let reason = event.attributeDescriptor(forKeyword: AEKeyword(kAEQuitReason))?.enumCodeValue else { return false }
+        return [kAELogOut, kAEReallyLogOut, kAEShowRestartDialog, kAEShowShutdownDialog, kAERestart, kAEShutDown]
+            .map { OSType($0) }.contains(reason)
     }
 
     /// The macOS Dock comes back whenever Kairos is not running to stand in for it.

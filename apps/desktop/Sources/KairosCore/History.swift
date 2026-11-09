@@ -36,9 +36,19 @@ extension AppData {
         if blockEvents.count > Self.maxBlockEvents { blockEvents.removeFirst(blockEvents.count - Self.maxBlockEvents) }
     }
 
-    /// Run once at launch. The timer does not survive a quit, so nothing is left blocking, and
-    /// the phase that was running is logged as cut short at the last save.
-    public mutating func recoverAfterLaunch(now: Date = Date()) {
+    /// Run once at launch. A strict focus phase that has not run out picks up where it was, so
+    /// quitting or a crash cannot end it; the returned value is what the timer resumes. Any
+    /// other timer does not survive a quit: nothing is left blocking, and the phase that was
+    /// running is logged as cut short at the last save.
+    @discardableResult
+    public mutating func recoverAfterLaunch(now: Date = Date()) -> StrictResume? {
+        if let until = focus.strictUntil, until > now {
+            let start = openSession.flatMap { $0.kind == .focus ? $0.start : nil } ?? now
+            openSession = nil
+            focus.mode = .strict
+            focus.endsAt = until
+            return StrictResume(startedAt: min(start, now), endsAt: until)
+        }
         if let open = openSession, open.end.timeIntervalSince(open.start) >= Session.minimumLength {
             var cut = open
             cut.completed = false
@@ -48,6 +58,8 @@ extension AppData {
         openSession = nil
         focus.mode = .off
         focus.endsAt = nil
+        focus.strictUntil = nil
+        return nil
     }
 
     /// Marks the newest unmarked block of `target` as overridden. Sites match the grant's

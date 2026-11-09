@@ -96,6 +96,8 @@ public enum BridgeState {
             "currentTask": task.map { ["id": $0.id.uuidString, "title": $0.title] as [String: Any] } ?? NSNull(),
             "endsAt": data.focus.endsAt.map { ms($0) as Any } ?? NSNull(),
             "overridesLeft": overridesLeft,
+            "overrideMinutes": data.settings.overrideMinutes,
+            "strictUntil": data.focus.strictUntil.map { ms($0) as Any } ?? NSNull(),
             "cloudVoice": cloudVoice ? ["provider": data.settings.voiceProvider.rawValue, "name": data.settings.voiceProvider.label] as [String: Any] : NSNull(),
             "rules": rules,
         ]

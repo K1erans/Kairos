@@ -250,6 +250,9 @@ public struct FocusState: Codable, Hashable, Sendable {
     public var currentTaskId: UUID?
     public var mode: Mode = .off
     public var endsAt: Date?
+    /// While a strict focus phase is locked: when it ends (or, paused, would end if resumed now).
+    /// Saved so that quitting or a crash cannot end it, and pushed so Chrome keeps enforcing it.
+    public var strictUntil: Date?
     public init() {}
 }
 
@@ -257,7 +260,7 @@ extension FocusState: Lenient {
     public static var fallback: FocusState { FocusState() }
     public static let fields: [LenientField<FocusState>] = [
         .field("activeGroupId", \.activeGroupId), .field("currentTaskId", \.currentTaskId), .field("mode", \.mode),
-        .field("endsAt", \.endsAt),
+        .field("endsAt", \.endsAt), .field("strictUntil", \.strictUntil),
     ]
 }
 

@@ -10,8 +10,8 @@ JAR="$HERE/.tools/tla2tools.jar"
 JAR_URL="https://github.com/tlaplus/tlaplus/releases/download/v1.7.4/tla2tools.jar"
 JAR_SHA="936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88"
 COVERED=(apps/desktop/Sources/KairosCore/Rules.swift apps/desktop/Sources/KairosCore/Tempo.swift
-         apps/desktop/Sources/KairosCore/Models.swift apps/desktop/Sources/Kairos/AppModel.swift
-         apps/desktop/Sources/Kairos/KairosApp.swift)
+         apps/desktop/Sources/KairosCore/Models.swift apps/desktop/Sources/KairosCore/History.swift
+         apps/desktop/Sources/Kairos/AppModel.swift apps/desktop/Sources/Kairos/KairosApp.swift)
 
 hashes() { (cd "$ROOT" && shasum -a 256 "${COVERED[@]}"); }
 
@@ -55,12 +55,13 @@ trap 'rm -rf "$WORK"' EXIT
 cp "$HERE/StrictMode.tla" "$WORK/"
 run() {
   local label="$1" inv="$2"; shift 2
-  local refuses=TRUE checks=TRUE syncs=TRUE picker=TRUE resets=TRUE locks=TRUE
+  local refuses=TRUE checks=TRUE syncs=TRUE picker=TRUE resets=TRUE locks=TRUE quit=TRUE resumes=TRUE
   for kv in "$@"; do
     case "$kv" in
       LedgerRefusesStrict=*) refuses="${kv#*=}";; LedgerChecksMax=*) checks="${kv#*=}";;
       SyncsModeFromTimer=*) syncs="${kv#*=}";; PickerLockedByTimer=*) picker="${kv#*=}";;
       ResetsOnEnterStrict=*) resets="${kv#*=}";; LocksStrictControls=*) locks="${kv#*=}";;
+      QuitLocked=*) quit="${kv#*=}";; ResumesStrict=*) resumes="${kv#*=}";;
     esac
   done
   cat > "$WORK/$label.cfg" <<CFG
@@ -73,6 +74,8 @@ CONSTANTS
   PickerLockedByTimer = $picker
   ResetsOnEnterStrict = $resets
   LocksStrictControls = $locks
+  QuitLocked = $quit
+  ResumesStrict = $resumes
 CONSTRAINT Bound
 INVARIANT $inv
 CFG
@@ -112,6 +115,8 @@ if [ "${1:-}" = "--mutants" ]; then
   expect FAIL mutant-no-reset-on-strict  StrictNoGrant    ResetsOnEnterStrict=FALSE
   expect FAIL mutant-picker-unlocked     StrictNoEscape   PickerLockedByTimer=FALSE
   expect FAIL mutant-skip-stop-unlocked  StrictNoEscape   LocksStrictControls=FALSE
+  expect FAIL mutant-quit-unlocked       QuitRefusedInStrict QuitLocked=FALSE
+  expect FAIL mutant-no-resume           StrictNoEscape   ResumesStrict=FALSE
 fi
 
 [ $status = 0 ] && echo "Result: matches expected.tsv." || echo "Result: DIFFERS from expected.tsv."

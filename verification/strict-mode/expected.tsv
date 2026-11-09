@@ -3,3 +3,4 @@ UsedBounded	PASS
 ModeMatchesTimer	PASS	
 StrictNoGrant	PASS	
 StrictNoEscape	PASS	
+QuitRefusedInStrict	PASS	

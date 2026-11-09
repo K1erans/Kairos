@@ -259,7 +259,7 @@ struct TodayPage: View {
                                 Button(model.tempo.phase == .idle ? "Start focus" : (model.tempo.isPaused ? "Resume" : "Pause")) { model.toggleTimer() }
                                     .buttonStyle(.borderedProminent)
                                 if model.tempo.phase != .idle {
-                                    Button("Skip") { model.skipPhase() }.disabled(model.strictLocked)
+                                    Button("Skip") { model.requestSkip() }.disabled(model.strictLocked)
                                     Button("+5 min") { model.addFiveMinutes() }
                                     Button("Stop") { model.stopTimer() }.disabled(model.strictLocked)
                                 }

@@ -1,15 +1,15 @@
 ---
 name: verify-strict-mode
-description: "Check a change to Kairos Desktop's mode, Pomodoro timer or 'Allow 5 min' overrides against the strict-mode model. Use when editing OverrideLedger (Rules.swift), TempoEngine (Tempo.swift), Mode (Models.swift), or setMode / startFocus / skipPhase / stopTimer / apply / syncFocusFromTempo / requestOverride in AppModel.swift, or the Mode picker in KairosApp.swift."
+description: "Check a change to Kairos Desktop's mode, Pomodoro timer, 'Allow 5 min' overrides, or quitting and relaunching during Strict against the strict-mode model. Use when editing OverrideLedger (Rules.swift), TempoEngine (Tempo.swift), Mode or FocusState (Models.swift), recoverAfterLaunch (History.swift), setMode / startFocus / skipPhase / stopTimer / apply / syncFocusFromTempo / requestOverride in AppModel.swift, or the Mode picker and Quit handling in KairosApp.swift."
 ---
 
 # Verify strict mode
 
-Kairos promises that Strict mode cannot be argued with: no "Allow 5 min", and no way out until the timer says so. A break in that promise lets the user through the blocker at the moment they asked not to be let through. Unit tests check single calls; the bugs here come from the order of presses (set a mode, start a timer, switch group, skip), so a TLA+ model checks every order.
+Kairos promises that Strict mode cannot be argued with: no "Allow 5 min", and no way out until the timer says so, not even by quitting Kairos. A break in that promise lets the user through the blocker at the moment they asked not to be let through. Unit tests check single calls; the bugs here come from the order of presses (set a mode, start a timer, switch group, skip, quit, relaunch), so a TLA+ model checks every order.
 
 Everything lives in `verification/strict-mode/`:
 
-- `StrictMode.tla` is the model. Each action is one `@MainActor` call in `apps/desktop/Sources/Kairos/AppModel.swift`, which is why each is a single step.
+- `StrictMode.tla` is the model. Each action is one `@MainActor` call in `apps/desktop/Sources/Kairos/AppModel.swift`, which is why each is a single step. Quit, force quit, the saved end passing while Kairos is closed, and relaunch are steps too.
 - `anchors.tsv` lists the exact lines of code each part of the model mirrors.
 - `expected.tsv` is the result on the code as it stands, including known findings.
 - `check.sh` runs it. It needs `java`; it downloads the pinned TLC (TLA+ tools 1.7.4, checksum verified) on first run.
@@ -19,7 +19,8 @@ Everything lives in `verification/strict-mode/`:
 | Property | In plain words | Harm if broken |
 | --- | --- | --- |
 | `StrictNoGrant` | While the mode is Strict there is no live "Allow 5 min" grant. | A blocked site or app stays open in Strict. |
-| `StrictNoEscape` | Nothing the user presses takes a strict focus phase out of Strict; only the clock running out does. | Strict is no stronger than Focus. |
+| `StrictNoEscape` | Nothing the user presses takes a strict focus phase out of Strict; only the clock running out does. Quitting, force quitting and relaunching count as presses. | Strict is no stronger than Focus. |
+| `QuitRefusedInStrict` | An ordinary Quit (menu bar menu, app menu, Cmd-Q) never goes through during a strict focus phase. | Blocked apps can be reopened until Kairos is launched again. |
 | `UsedBounded` | No more than `maxOverridesPerSession` overrides between two ledger resets. | Unlimited overrides. |
 | `ModeMatchesTimer` | While a timer runs, the mode sent to the extensions is the mode the timer implies. | Chrome blocks (or fails to block) out of step with the app. |
 
@@ -29,6 +30,8 @@ None open. Two were found when the model was first run and fixed on 2026-11-09; 
 
 - A grant made in Focus used to stay live after switching to Strict. `modeChanged` now resets the ledger on entering Strict (`ResetsOnEnterStrict`).
 - Skip and Stop used to end a strict focus phase. `skipPhase` and `stopTimer` now do nothing while `strictLocked` (`LocksStrictControls`), and their buttons are disabled.
+
+Quitting used to end a strict phase: launch always came back off. Since 2026-11-09 the end of a locked strict phase is saved as `FocusState.strictUntil`, launch resumes it (`ResumesStrict`), and Quit is refused while it is locked (`QuitLocked`). Logging out, restarting and shutting down still quit (modelled as `ForceQuit`), and the phase resumes at the next launch. Removing either switch fails the check.
 
 ## Run it
 
@@ -60,12 +63,15 @@ Take the printed steps and walk them through the code, one line per step, using 
 
 ## Coverage and sync
 
-Covered: `OverrideLedger` in `apps/desktop/Sources/KairosCore/Rules.swift`; `TempoEngine.mode`, `use`, `start`, `skip`, `stop`, `tick`, `advance`, `reset` in `Tempo.swift`; `Mode.blocks` in `Models.swift`; `setMode`, `modeChanged`, `strictLocked`, `startFocus`, `toggleTimer`, `skipPhase`, `stopTimer`, `apply`, `syncFocusFromTempo`, `switchGroup`, `requestOverride` in `apps/desktop/Sources/Kairos/AppModel.swift`; the Mode picker in `KairosApp.swift`.
+Covered: `OverrideLedger` in `apps/desktop/Sources/KairosCore/Rules.swift`; `TempoEngine.mode`, `use`, `start`, `skip`, `stop`, `tick`, `advance`, `reset`, `resumeStrict` in `Tempo.swift`; `Mode.blocks` and `FocusState.strictUntil` in `Models.swift`; `AppData.recoverAfterLaunch` in `History.swift`; `setMode`, `modeChanged`, `strictLocked`, `startFocus`, `requestStartFocus`, `requestSkip`, `toggleTimer`, `skipPhase`, `stopTimer`, `apply`, `syncFocusFromTempo`, `switchGroup`, `requestOverride` and the launch in `init` in `apps/desktop/Sources/Kairos/AppModel.swift`; the Mode picker, the Quit buttons and `applicationShouldTerminate` in `KairosApp.swift`.
 
-Last confirmed in sync: 2026-11-09, recorded as file checksums in `verification/strict-mode/synced.sha256` because the repository had no commits yet. Once it has, also write the commit hash here each time you run `--confirm`.
+`requestStartFocus` and `requestSkip` ask before a strict focus phase starts. Agreeing is the model's `StartFocus` or `Skip`; cancelling changes nothing, so it is no step.
+
+Last confirmed in sync: 2026-11-09, recorded as file checksums in `verification/strict-mode/synced.sha256`, in the commit "Keep strict focus through a quit and hide blocked apps instead of quitting them" (its parent is 42f8a77). Write the commit hash here each time you run `--confirm`.
 
 ## What this does not cover
 
 - It checks the model, not the Swift. `anchors.tsv` catches a mirrored line changing; it cannot catch new code that changes the mode some other way. That is what the `NOTE` is for.
 - Bounds: `Max = 3` overrides. Short and long breaks are one phase. Grant expiry is "at some point", not five minutes.
-- Left out: quitting Kairos (always ends a session), the Chrome extensions' own handling of the pushed state, app blocking and Jev, and the reason text on an override.
+- Quit and relaunch: a paused strict phase resumes running at launch, with its saved end (the time it would have ended if resumed at the last save); the model treats paused and running alike there.
+- Left out: the Chrome extensions' own handling of the pushed state (they keep enforcing until `strictUntil` while Kairos is closed), app blocking and Jev, and the reason text on an override.

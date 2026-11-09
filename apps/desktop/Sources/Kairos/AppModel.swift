@@ -69,9 +69,11 @@ final class AppModel: ObservableObject {
     init(store: DataStore = .standard(), readKeys: Bool = true) {
         self.store = store
         var loaded = store.load()
-        loaded.recoverAfterLaunch()
+        let resume = loaded.recoverAfterLaunch()
         data = loaded
-        tempo = TempoEngine(preset: loaded.preset(named: loaded.activeGroup?.tempoPreset ?? "Classic"))
+        var engine = TempoEngine(preset: loaded.preset(named: loaded.activeGroup?.tempoPreset ?? "Classic"))
+        if let resume { engine.resumeStrict(resume) }
+        tempo = engine
         if readKeys { refreshKeys() }
     }
 
@@ -109,6 +111,7 @@ final class AppModel: ObservableObject {
         }
         refreshRunning()
         saveNow() // keeps what launch recovery logged
+        if mode.blocks { sweepSoon() } // a strict phase resumed after a quit
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
     }
 
@@ -355,9 +358,36 @@ final class AppModel: ObservableObject {
         apply(tempo.start(.focus, strict: mode == .strict, now: Date()))
     }
 
+    /// What the owner must agree to before a strict focus phase starts. Set by the app; the
+    /// snapshot tool leaves it nil and never starts a timer.
+    var confirmStrict: ((StrictConfirmation) -> Bool)?
+
+    /// Start from a button or hotkey: a strict focus phase starts only once the owner agrees.
+    func requestStartFocus() {
+        let preset = data.preset(named: activeGroup?.tempoPreset ?? "Classic")
+        guard tempo.phase == .idle else { return }
+        if mode == .strict || preset.strict {
+            guard agreesToStrict(minutes: preset.focusMin) else { return }
+        }
+        startFocus()
+    }
+
+    /// Skip from a break: skipping into a strict focus phase starts a lock, so it asks too.
+    func requestSkip() {
+        if tempo.phase.isBreak, tempo.nextFocusIsStrict {
+            guard agreesToStrict(minutes: data.preset(named: activeGroup?.tempoPreset ?? "Classic").focusMin) else { return }
+        }
+        skipPhase()
+    }
+
+    private func agreesToStrict(minutes: Int) -> Bool {
+        guard let confirmStrict else { return true }
+        return confirmStrict(StrictConfirmation(minutes: minutes, endsAt: Date().addingTimeInterval(TimeInterval(minutes * 60))))
+    }
+
     func toggleTimer() {
         let t = Date()
-        if tempo.phase == .idle { startFocus() }
+        if tempo.phase == .idle { requestStartFocus() }
         else if tempo.isPaused { tempo.resume(now: t); syncFocusFromTempo() }
         else { tempo.pause(now: t); syncFocusFromTempo() }
     }
@@ -373,6 +403,9 @@ final class AppModel: ObservableObject {
         now = Date()
         let events = tempo.tick(now: now)
         if !events.isEmpty { apply(events) }
+        // A paused strict phase would end later the longer it waits, so its saved end moves on.
+        if tempo.isPaused, strictLocked, let until = data.focus.strictUntil,
+           now.addingTimeInterval(remaining).timeIntervalSince(until) > 30 { syncFocusFromTempo() }
         // Keeps `openSession` fresh, so a crash loses at most a minute of the running phase.
         if tempo.phase != .idle, now.timeIntervalSince(lastSave) >= 60 { saveNow() }
     }
@@ -408,6 +441,8 @@ final class AppModel: ObservableObject {
         var focus = data.focus
         if tempo.phase != .idle { focus.mode = tempo.mode }
         focus.endsAt = tempo.isRunning ? tempo.endsAt : nil
+        focus.strictUntil = tempo.phase == .focus && focus.mode == .strict
+            ? (tempo.isPaused ? Date().addingTimeInterval(tempo.remaining(now: Date())) : tempo.endsAt) : nil
         if focus != data.focus { data.focus = focus } else { objectWillChange.send() }
     }
 
@@ -478,14 +513,13 @@ final class AppModel: ObservableObject {
         if let front, let bid = front.bundleIdentifier, !hide.contains(bid) { appActivated(front) }
     }
 
+    /// Hides, in Strict too: quitting would lose the owner's unsaved work in that app.
     private func block(_ app: NSRunningApplication, name: String, layer: String, detail: String) {
         guard let bid = app.bundleIdentifier else { return }
-        let strict = mode == .strict
         let screen = Apps.displayShowing(pid: app.processIdentifier) // before its windows go
-        if strict { app.terminate() } else { app.hide() }
+        app.hide()
         data.logBlock(BlockEvent(groupId: data.focus.activeGroupId, target: bid, label: name, layer: layer))
-        notice = BlockNotice(kind: .app(bundleId: bid), title: strict ? "\(name) was quit" : "\(name) is hidden",
-                             detail: detail, screen: screen)
+        notice = BlockNotice(kind: .app(bundleId: bid), title: "\(name) is hidden", detail: detail, screen: screen)
     }
 
     /// An "Allow" running out changes `temporaryAllows` and may leave a blocked app on screen.
@@ -533,7 +567,7 @@ final class AppModel: ObservableObject {
     }
 
     func dismissNotice() {
-        if notice?.kind == .rest { skipPhase() }
+        if notice?.kind == .rest { requestSkip() }
         notice = nil
     }
 

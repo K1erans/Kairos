@@ -141,8 +141,41 @@ def relaunch_check():
     wait_for(lambda: not listening(), 3)
 
 
+def strict_relaunch_check():
+    """A strict focus phase saved before a quit comes back strict, with its end, at launch."""
+    seed()
+    with open(DATA) as f:
+        data = json.load(f)
+    until = int(time.time()) + 20 * 60
+    stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(until))
+    data["focus"].update({"mode": "strict", "strictUntil": stamp, "endsAt": stamp})
+    data["settings"]["overrideMinutes"] = 7
+    with open(DATA, "w") as f:
+        json.dump(data, f)
+    app = subprocess.Popen([os.path.join(APP, "Contents/MacOS/Kairos")], env=dict(ENV, KAIROS_START_FOCUS="0"),
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        wait_for(listening)
+        host = Host()
+        host.send({"type": "getState", "id": "strict"})
+        state = (host.reply("strict") or {}).get("state", {})
+        check("a strict phase saved before a quit resumes strict, with the same end",
+              state.get("mode") == "strict" and state.get("strictUntil") == until * 1000,
+              f"mode {state.get('mode')}, strictUntil {state.get('strictUntil')}, expected {until * 1000}")
+        check("the pushed state carries overrideMinutes", state.get("overrideMinutes") == 7, f"{state.get('overrideMinutes')}")
+        host.send({"type": "override.request", "id": "so", "target": "youtube.com", "reason": "please"})
+        r = host.reply("so") or {}
+        check("the resumed strict phase refuses overrides", r.get("allowed") is False, json.dumps(r))
+        host.close()
+    finally:
+        app.terminate()
+        app.wait(timeout=5)
+    wait_for(lambda: not listening(), 3)
+
+
 def main():
     relaunch_check()
+    strict_relaunch_check()
     seed()
     app = subprocess.Popen([os.path.join(APP, "Contents/MacOS/Kairos")], env=ENV,
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
