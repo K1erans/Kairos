@@ -74,6 +74,11 @@ Claude.
   small LaunchAgent (`com.kairos.dock-watchdog`) brings the Dock back if Kairos stops without doing
   it, and is removed when the switch is turned off.
 
+Kairos Bar ends with Downloads and Trash, as the Dock does. Files dropped on Trash go to the
+Trash, documents dropped on an app open in it, and an app dropped anywhere else joins the active
+group. Change the order of a group's apps from an app's menu on the bar or on the Groups page.
+Kairos Bar shows no unread badges: macOS has no public way to read another app's Dock badge.
+
 Press Option-Space anywhere to add a task, and Option-Shift-Space to start or pause the timer.
 Settings > General changes or turns off both shortcuts. Control-1 to Control-9 can switch groups;
 that is off for new profiles because macOS can use those keys to switch desktops.

@@ -28,12 +28,14 @@ enum Snapshot {
         }
 
         func dock(_ name: String, pointer: DockGeometry.Slot? = nil, offset: Double = 0, reveal: Double = 1,
-                  reduceMotion: Bool = false, surface: DockSurface = .material) {
+                  reduceMotion: Bool = false, surface: DockSurface = .material, launching: String? = nil) {
             let frame = DockFrame(data: model.data, running: model.openApps, reduceMotion: reduceMotion)
             let rest = frame.geometry.layout(pointer: nil).items
             let p = pointer.flatMap { slot in rest.first { $0.slot == slot }?.center }.map { $0 + offset }
             let light = surface == .lightGlassStandIn
-            shot("dock-\(name)", DockStage(tracker: DockTracker(frame: frame, pointer: p, reveal: reveal),
+            let tracker = DockTracker(frame: frame, pointer: p, reveal: reveal)
+            if let launching { tracker.launches.start(launching, now: Date()) }
+            shot("dock-\(name)", DockStage(tracker: tracker,
                                            autoHide: model.data.settings.autoHideBar, light: light)
                 .environment(\.dockSurface, surface)
                 .environment(\.colorScheme, light ? .light : (NSApp.appearance?.name == .aqua ? .light : .dark)))
@@ -93,6 +95,8 @@ enum Snapshot {
         model.data.settings.dockEdge = .bottom
         dock("bottom-36-running-light-glass", surface: .lightGlassStandIn)
         model.data.settings.dockEdge = .left
+        dock("left-36-hover-trash", pointer: .folder(.trash))
+        dock("left-36-launching", launching: "com.apple.iCal")
         // Reduce motion: no magnification under the pointer, and auto-hide fades instead of sliding.
         dock("left-36-hover-app-reduce-motion", pointer: .app("com.apple.Safari"), reduceMotion: true)
         model.data.settings.autoHideBar = true

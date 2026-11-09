@@ -89,6 +89,9 @@ final class DockTracker: ObservableObject {
     @Published var dropTargeted = false
     /// How much of the bar is on screen: 1 unless auto-hide has slid it off its edge.
     @Published var reveal: Double
+    /// Apps clicked on the bar that are still starting, which pulse.
+    @Published var launches = DockLaunches()
+    @Published var trashFull = false
 
     init(frame: DockFrame, pointer: Double? = nil, reveal: Double = 1) {
         self.frame = frame
@@ -251,6 +254,10 @@ final class DockPanelController {
         if panel.ignoresMouseEvents == on { panel.ignoresMouseEvents = !on }
         let next = on ? axis : nil
         guard next != tracker.pointer else { return }
+        if tracker.pointer == nil, next != nil, tracker.frame.geometry.slots.contains(.folder(.trash)) {
+            let full = Folders.trashIsFull
+            if full != tracker.trashFull { tracker.trashFull = full }
+        }
         // Ease in and out of magnification; follow the pointer exactly while on the bar.
         if (next == nil) != (tracker.pointer == nil), !tracker.frame.motion.reduced {
             withAnimation(.easeOut(duration: 0.16)) { tracker.pointer = next }
@@ -306,23 +313,31 @@ struct DockView: View {
         let layout = g.layout(pointer: tracker.resizing ? nil : tracker.pointer)
         ZStack(alignment: .topLeading) {
             background(f, layout)
-            ForEach(layout.items, id: \.slot) { item in
-                slot(item, f)
+            ForEach(layout.keyed, id: \.key) { entry in
+                slot(entry.item, f)
             }
             if let h = layout.hovered { label(for: layout.items[h], f) }
         }
         .frame(width: f.size.width, height: f.size.height, alignment: .topLeading)
         .offset(slide(f))
         .opacity(f.motion.appearance(reveal: tracker.reveal).opacity)
-        .onDrop(of: [.fileURL], isTargeted: $tracker.dropTargeted) { providers in
-            for provider in providers {
-                _ = provider.loadObject(ofClass: URL.self) { url, _ in
-                    guard let url, url.pathExtension == "app", let id = Bundle(url: url)?.bundleIdentifier else { return }
-                    Task { @MainActor in model.addDockApp(id) }
-                }
-            }
-            return true
+        .onDrop(of: [.fileURL], delegate: DockDropTarget(model: model, tracker: tracker))
+        .onReceive(model.$runningApps) { running in
+            var launches = tracker.launches
+            launches.update(running: running, now: Date())
+            if launches != tracker.launches { tracker.launches = launches }
         }
+    }
+
+    /// Opens an app from the bar. One that is not running yet pulses until it is.
+    private func launch(_ bundleId: String) {
+        if !model.runningApps.contains(bundleId) {
+            tracker.launches.start(bundleId, now: Date())
+            DispatchQueue.main.asyncAfter(deadline: .now() + DockLaunches.timeout) { [tracker] in
+                tracker.launches.update(running: AppModel.shared.runningApps, now: Date())
+            }
+        }
+        Apps.open(bundleId)
     }
 
     /// Auto-hide slides the bar past its screen edge, where the panel clips it. With Reduce
@@ -417,8 +432,9 @@ struct DockView: View {
         case let .app(bundleId):
             Image(nsImage: Apps.icon(bundleId)).resizable().interpolation(.high)
                 .frame(width: item.size, height: item.size)
+                .modifier(LaunchPulse(active: tracker.launches.ids.contains(bundleId)))
                 .contentShape(Rectangle())
-                .onTapGesture { Apps.open(bundleId) }
+                .onTapGesture { launch(bundleId) }
                 .contextMenu { appMenu(bundleId) }
                 .accessibilityLabel(Apps.name(bundleId))
                 .accessibilityAddTraits(.isButton)
@@ -432,7 +448,7 @@ struct DockView: View {
             Image(nsImage: Apps.icon(bundleId)).resizable().interpolation(.high)
                 .frame(width: item.size, height: item.size)
                 .contentShape(Rectangle())
-                .onTapGesture { Apps.open(bundleId) }
+                .onTapGesture { launch(bundleId) }
                 .contextMenu {
                     Button("Keep in \(model.activeGroup?.name ?? "Group")") { model.addDockApp(bundleId) }
                     blockButton(bundleId)
@@ -445,6 +461,20 @@ struct DockView: View {
                 .accessibilityAddTraits(.isButton)
                 .position(at)
             dot(item, f)
+        case let .folder(folder):
+            Image(nsImage: Folders.icon(folder, trashFull: tracker.trashFull)).resizable().interpolation(.high)
+                .frame(width: item.size, height: item.size)
+                .contentShape(Rectangle())
+                .onTapGesture { Folders.open(folder) }
+                .contextMenu {
+                    Button("Open in Finder") { Folders.open(folder) }
+                    Divider()
+                    barMenu
+                }
+                .accessibilityLabel(folder.name)
+                .accessibilityHint(folder == .trash ? "Drop files here to move them to the Trash" : "Opens in Finder")
+                .accessibilityAddTraits(.isButton)
+                .position(at)
         case .addApp:
             placeholder("square.and.arrow.down", size: item.size)
                 .frame(width: item.size, height: item.size)
@@ -615,6 +645,7 @@ struct DockView: View {
         case .newGroup: return ("New Group…", nil)
         case .divider, .separator: return ("", nil)
         case let .app(bundleId), let .running(bundleId): return (Apps.name(bundleId), nil)
+        case let .folder(folder): return (folder.name, nil)
         case .addApp: return ("Add Apps to \(model.activeGroup?.name ?? "Group")…", nil)
         }
     }
@@ -649,11 +680,18 @@ struct DockView: View {
 
     @ViewBuilder
     private func appMenu(_ bundleId: String) -> some View {
-        Button("Open") { Apps.open(bundleId) }
+        Button("Open") { launch(bundleId) }
         if model.runningApps.contains(bundleId) {
             Button("Hide") { Apps.running(bundleId)?.hide() }
             Button("Quit") { Apps.running(bundleId)?.terminate() }
         }
+        Divider()
+        let apps = model.activeGroup?.dockApps ?? []
+        let across = tracker.frame.edge == .bottom
+        Button(across ? "Move Left" : "Move Up") { model.moveDockApp(bundleId, by: -1) }
+            .disabled(apps.first == bundleId)
+        Button(across ? "Move Right" : "Move Down") { model.moveDockApp(bundleId, by: 1) }
+            .disabled(apps.last == bundleId)
         Divider()
         blockButton(bundleId)
         Button("Remove from \(model.activeGroup?.name ?? "group")") { model.removeDockApp(bundleId) }
@@ -669,6 +707,89 @@ struct DockView: View {
             Button("Block in \(group)") { model.setAppBlocked(bundleId, true) }
         }
     }
+}
+
+/// Dims and brightens an app's icon while it starts, in place of the Dock's bounce, so it
+/// moves nothing even with Reduce motion on.
+private struct LaunchPulse: ViewModifier {
+    let active: Bool
+    @State private var dim = false
+
+    func body(content: Content) -> some View {
+        content
+            .opacity(dim ? 0.4 : 1)
+            .onChange(of: active, initial: true) { _, on in
+                if on {
+                    withAnimation(.easeInOut(duration: 0.55).repeatForever(autoreverses: true)) { dim = true }
+                } else {
+                    var still = Transaction()
+                    still.disablesAnimations = true
+                    withTransaction(still) { dim = false }
+                }
+            }
+    }
+}
+
+/// Files dropped on Kairos Bar: on Trash they go to the Trash, on an app the documents open in
+/// it, and apps dropped anywhere else join the active group (DockDrop).
+private struct DockDropTarget: DropDelegate {
+    let model: AppModel
+    let tracker: DockTracker
+
+    func dropEntered(info: DropInfo) { tracker.dropTargeted = true }
+    func dropExited(info: DropInfo) { tracker.dropTargeted = false }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        DropProposal(operation: slot(at: info.location) == .folder(.trash) ? .move : .copy)
+    }
+
+    func performDrop(info: DropInfo) -> Bool {
+        tracker.dropTargeted = false
+        let slot = slot(at: info.location)
+        let box = URLBox()
+        let group = DispatchGroup()
+        for provider in info.itemProviders(for: [.fileURL]) {
+            group.enter()
+            _ = provider.loadObject(ofClass: URL.self) { url, _ in
+                if let url { box.append(url) }
+                group.leave()
+            }
+        }
+        group.notify(queue: .main) { [model, tracker] in
+            MainActor.assumeIsolated {
+                Self.perform(DockDrop.plan(box.urls, on: slot, bundleId: { Bundle(url: $0)?.bundleIdentifier }), model: model, tracker: tracker)
+            }
+        }
+        return true
+    }
+
+    private func slot(at point: CGPoint) -> DockGeometry.Slot? {
+        tracker.frame.geometry.slot(at: tracker.frame.bar(point).axis)
+    }
+
+    @MainActor
+    private static func perform(_ drop: DockDrop, model: AppModel, tracker: DockTracker) {
+        switch drop {
+        case let .addApps(ids):
+            ids.forEach { model.addDockApp($0) }
+        case let .open(urls, app):
+            guard let appURL = Apps.running(app)?.bundleURL ?? Apps.url(app) else { return }
+            NSWorkspace.shared.open(urls, withApplicationAt: appURL, configuration: NSWorkspace.OpenConfiguration())
+        case let .moveToTrash(urls):
+            NSWorkspace.shared.recycle(urls) { _, _ in
+                DispatchQueue.main.async { tracker.trashFull = Folders.trashIsFull }
+            }
+        case .nothing:
+            break
+        }
+    }
+}
+
+private final class URLBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var list: [URL] = []
+    func append(_ url: URL) { lock.lock(); list.append(url); lock.unlock() }
+    var urls: [URL] { lock.lock(); defer { lock.unlock() }; return list }
 }
 
 /// Group and app management started from the bar. Each runs after the menu closes, and

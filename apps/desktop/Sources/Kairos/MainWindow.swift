@@ -198,6 +198,8 @@ struct AppListEditor: View {
     let title: String
     let empty: String
     @Binding var bundleIds: [String]
+    /// Up and down buttons on each row, for the order of apps on Kairos Bar.
+    var reorderable = false
     @State private var picking = false
 
     var body: some View {
@@ -213,6 +215,16 @@ struct AppListEditor: View {
                     Image(nsImage: Apps.icon(id)).resizable().frame(width: 22, height: 22)
                     Text(Apps.name(id))
                     Spacer()
+                    if reorderable {
+                        Button { bundleIds = bundleIds.moving(id, by: -1) } label: { Image(systemName: "chevron.up") }
+                            .buttonStyle(.plain).foregroundStyle(.secondary)
+                            .disabled(bundleIds.first == id)
+                            .accessibilityLabel("Move \(Apps.name(id)) up")
+                        Button { bundleIds = bundleIds.moving(id, by: 1) } label: { Image(systemName: "chevron.down") }
+                            .buttonStyle(.plain).foregroundStyle(.secondary)
+                            .disabled(bundleIds.last == id)
+                            .accessibilityLabel("Move \(Apps.name(id)) down")
+                    }
                     Button { bundleIds.removeAll { $0 == id } } label: { Image(systemName: "minus.circle") }
                         .buttonStyle(.plain).foregroundStyle(.secondary)
                         .accessibilityLabel("Remove \(Apps.name(id))")
@@ -662,7 +674,7 @@ struct GroupDetail: View {
                     }
                 }
                 AppListEditor(title: "Apps in Kairos Bar", empty: "No apps yet. Add some, or drag an app onto Kairos Bar.",
-                              bundleIds: g.dockApps)
+                              bundleIds: g.dockApps, reorderable: true)
                 Divider()
                 Button("Delete Group\u{2026}", role: .destructive) { deleting = g.wrappedValue }
                     .disabled(model.data.groups.count < 2)
@@ -895,6 +907,7 @@ struct SettingsPage: View {
                 Slider(value: $model.data.settings.iconSize, in: 20...64, step: 2) { Text("Icon size: \(Int(model.data.settings.iconSize))") }
                 Text("You can also drag the divider on Kairos Bar itself.").font(.callout).foregroundStyle(.secondary)
                 Toggle("Automatically hide and show Kairos Bar", isOn: $model.data.settings.autoHideBar)
+                Toggle("Show Downloads and Trash at the end of Kairos Bar", isOn: $model.data.settings.showsDockFolders)
                 VStack(alignment: .leading, spacing: 4) {
                     Toggle("Use Kairos Bar instead of the macOS Dock", isOn: Binding(
                         get: { model.data.settings.replacesSystemDock },

@@ -6,8 +6,8 @@ import Foundation
 public struct DockGeometry: Equatable, Sendable {
     public enum Slot: Hashable, Sendable {
         /// `running` is an open app that is not pinned to the active group; `separator` sets
-        /// those apart, as the Dock does for recent apps.
-        case group(UUID), newGroup, divider, app(String), addApp, separator, running(String)
+        /// those apart, as the Dock does for recent apps, and sets the folders apart at the end.
+        case group(UUID), newGroup, divider, app(String), addApp, separator, running(String), folder(DockFolder)
         public var magnifies: Bool { self != .divider && self != .separator }
     }
 
@@ -40,12 +40,20 @@ public struct DockGeometry: Equatable, Sendable {
 
     /// `running` is the open apps in launch order. Those not pinned to the active group follow
     /// the pinned ones after a separator, so an app you open always has an icon on the bar.
+    /// Downloads and Trash come last, after another separator, unless turned off in Settings.
     public static func slots(for data: AppData, running: [String] = []) -> [Slot] {
         let apps = data.activeGroup?.dockApps ?? []
         var seen = Set(apps)
         let extra = running.filter { seen.insert($0).inserted }
+        let folders: [Slot] = data.settings.showsDockFolders ? [.separator] + DockFolder.allCases.map { .folder($0) } : []
         return data.groups.map { .group($0.id) } + [.newGroup, .divider] + (apps.isEmpty ? [.addApp] : apps.map { .app($0) })
-            + (extra.isEmpty ? [] : [.separator] + extra.map { .running($0) })
+            + (extra.isEmpty ? [] : [.separator] + extra.map { .running($0) }) + folders
+    }
+
+    /// The slot a pointer at `axis` is over, as the bar lays itself out under that pointer.
+    public func slot(at axis: Double) -> Slot? {
+        let l = layout(pointer: axis)
+        return l.hovered.map { l.items[$0].slot }
     }
 
     public static let dividerLength = 11.0
@@ -89,6 +97,13 @@ public struct DockGeometry: Equatable, Sendable {
         }
         let end = (grown.last?.hi ?? 0) + padding
         return Layout(items: items, start: shift, end: end + shift, hovered: hovered)
+    }
+
+    /// Tells items apart for drawing. Only separators repeat on the bar, so each is keyed by its
+    /// slot and how many of the same slot came before it.
+    public struct ItemKey: Hashable, Sendable {
+        public let slot: Slot
+        public let occurrence: Int
     }
 
     /// How far the bar can reach past its rest extent at each end, over every pointer position.
@@ -162,5 +177,17 @@ public struct DockMotion: Equatable, Sendable {
     /// edge, and the bar's opacity.
     public func appearance(reveal: Double) -> (away: Double, opacity: Double) {
         reduced ? (0, reveal) : (1 - reveal, 1)
+    }
+}
+
+extension DockGeometry.Layout {
+    /// The items with keys that stay unique when a slot repeats.
+    public var keyed: [(key: DockGeometry.ItemKey, item: DockGeometry.Placement)] {
+        var seen: [DockGeometry.Slot: Int] = [:]
+        return items.map { item in
+            let n = seen[item.slot, default: 0]
+            seen[item.slot] = n + 1
+            return (DockGeometry.ItemKey(slot: item.slot, occurrence: n), item)
+        }
     }
 }

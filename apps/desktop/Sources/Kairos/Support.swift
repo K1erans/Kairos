@@ -79,6 +79,34 @@ struct InstalledApp: Identifiable, Hashable {
     }
 }
 
+/// Downloads and Trash on Kairos Bar.
+enum Folders {
+    static func url(_ folder: DockFolder) -> URL? {
+        FileManager.default.urls(for: folder == .trash ? .trashDirectory : .downloadsDirectory, in: .userDomainMask).first
+    }
+
+    static func icon(_ folder: DockFolder, trashFull: Bool) -> NSImage {
+        if folder == .trash {
+            return NSImage(named: trashFull ? NSImage.trashFullName : NSImage.trashEmptyName) ?? NSImage()
+        }
+        guard let u = url(folder) else { return NSImage() }
+        return NSWorkspace.shared.icon(forFile: u.path)
+    }
+
+    /// Whether the Trash has anything in it. macOS may refuse to list it to an app without Full
+    /// Disk Access; then the bar shows it empty.
+    static var trashIsFull: Bool {
+        guard let u = url(.trash), let items = try? FileManager.default.contentsOfDirectory(atPath: u.path) else { return false }
+        return items.contains { $0 != ".DS_Store" }
+    }
+
+    /// Shows the folder in Finder.
+    static func open(_ folder: DockFolder) {
+        guard let u = url(folder) else { return }
+        NSWorkspace.shared.open(u)
+    }
+}
+
 enum Apps {
     static func url(_ bundleId: String) -> URL? { NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleId) }
 

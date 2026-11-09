@@ -244,6 +244,7 @@ final class ClientTests: XCTestCase {
 
     func testOpenAppsNotPinnedFollowASeparator() {
         var data = AppData.starter()
+        data.settings.showsDockFolders = false // the folders' own separator is tested in DockItemsTests
         data.groups[0].dockApps = ["a", "b"]
         data.focus.activeGroupId = data.groups[0].id
         let slots = DockGeometry.slots(for: data, running: ["b", "x", "a", "y", "x"])
@@ -365,6 +366,7 @@ final class DockGeometryTests: XCTestCase {
 
     func testSlotsOfferNewGroupAndAddAppForAnEmptyGroup() {
         var data = AppData.starter()
+        data.settings.showsDockFolders = false
         XCTAssertEqual(DockGeometry.slots(for: data).filter { $0 == .newGroup }.count, 1)
         XCTAssertFalse(DockGeometry.slots(for: data).contains(.addApp))
         data.groups[0].dockApps = []

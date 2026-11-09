@@ -396,6 +396,12 @@ final class AppModel: ObservableObject {
         data.groups[i].dockApps.removeAll { $0 == bundleId }
     }
 
+    /// Moves a pinned app along Kairos Bar, from its menu or the Groups page.
+    func moveDockApp(_ bundleId: String, by offset: Int, in groupId: UUID? = nil) {
+        guard let i = data.groups.firstIndex(where: { $0.id == (groupId ?? data.focus.activeGroupId) }) else { return }
+        data.groups[i].dockApps = data.groups[i].dockApps.moving(bundleId, by: offset)
+    }
+
     // MARK: Tempo
 
     /// Strict chosen by hand before the timer starts holds until the timer stops.
