@@ -34,6 +34,7 @@ function render(next) {
   $("sentence").textContent = player.loaded ? player.sentence : "Open an article and press play, or right-click a link and choose “Read this link”.";
   $("toggle").textContent = player.playing ? "⏸" : "▶";
   $("toggle").setAttribute("aria-label", player.playing ? "Pause" : "Play");
+  $("toggle").title = player.playing ? "Pause (Alt+R)" : "Play (Alt+R)";
   for (const id of ["prev", "next", "prevPara", "nextPara", "stop"]) $(id).disabled = !player.loaded;
   const progress = $("progress");
   progress.disabled = !player.loaded;
@@ -56,6 +57,16 @@ function render(next) {
   }
 }
 
+/** A button whose accessible name says which row it acts on. */
+function rowButton(text, what, onClick) {
+  const button = document.createElement("button");
+  button.textContent = text;
+  button.title = `${text} ${what}`;
+  button.setAttribute("aria-label", `${text} ${what}`);
+  button.addEventListener("click", onClick);
+  return button;
+}
+
 function renderQueue() {
   const list = $("queue");
   list.textContent = "";
@@ -68,13 +79,12 @@ function renderQueue() {
     name.textContent = entry.title || entry.url;
     name.title = entry.url;
     grow.append(name);
-    const playBtn = document.createElement("button");
-    playBtn.textContent = "Read";
-    playBtn.addEventListener("click", () => send({ type: "queue.play", index }).then(render));
-    const remove = document.createElement("button");
-    remove.textContent = "Remove";
-    remove.addEventListener("click", () => send({ type: "queue.remove", index }).then(render));
-    li.append(grow, playBtn, remove);
+    const what = `“${entry.title || entry.url}”`;
+    li.append(
+      grow,
+      rowButton("Read", what, () => send({ type: "queue.play", index }).then(render)),
+      rowButton("Remove", what, () => send({ type: "queue.remove", index }).then(render)),
+    );
     list.append(li);
   });
   $("queueSection").hidden = player.queue.length === 0;
@@ -234,13 +244,8 @@ async function loadSaved() {
     why.className = "why";
     why.textContent = `Saved ${new Date(entry.at).toLocaleDateString()}`;
     grow.append(name, why);
-    const open = document.createElement("button");
-    open.textContent = "Open";
-    open.addEventListener("click", () => showScene({ ...entry, url }));
-    const remove = document.createElement("button");
-    remove.textContent = "Delete";
-    remove.addEventListener("click", () => deleteScene(url, entry.id));
-    li.append(grow, open, remove);
+    const what = `scene “${entry.subject}”`;
+    li.append(grow, rowButton("Open", what, () => showScene({ ...entry, url })), rowButton("Delete", what, () => deleteScene(url, entry.id)));
     list.append(li);
   }
 }
@@ -259,10 +264,7 @@ function renderCandidates(result) {
     why.className = "why";
     why.textContent = candidate.why || "";
     grow.append(name, why);
-    const build = document.createElement("button");
-    build.textContent = "Build";
-    build.addEventListener("click", () => generate(candidate.name));
-    li.append(grow, build);
+    li.append(grow, rowButton("Build", `a scene of “${candidate.name}”`, () => generate(candidate.name)));
     list.append(li);
   }
 }

@@ -1,12 +1,15 @@
-:root { color-scheme: light dark; --accent: #22a06b; --line: color-mix(in srgb, CanvasText 15%, transparent); }
+:root { color-scheme: light dark; --accent: #1a7f54; --muted: #595959; --status: #8a3f00; --line: color-mix(in srgb, CanvasText 15%, transparent); }
+@media (prefers-color-scheme: dark) {
+  :root { --muted: #b4b4b4; --status: #f5b66b; }
+}
 * { box-sizing: border-box; }
 body { margin: 0; padding: 14px; font: 13px/1.45 -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif; }
 h1 { font-size: 15px; margin: 0 0 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: GrayText; margin: 0 0 8px; }
+h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); margin: 0 0 8px; }
 section { border-top: 1px solid var(--line); padding: 12px 0; }
-.status { margin: 0; min-height: 18px; color: #b45309; }
+.status { margin: 0; min-height: 18px; color: var(--status); }
 .sentence { margin: 0 0 10px; min-height: 58px; max-height: 120px; overflow: auto; font-size: 14px; }
-.meta { display: flex; justify-content: flex-end; color: GrayText; font-size: 12px; font-variant-numeric: tabular-nums; }
+.meta { display: flex; justify-content: flex-end; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
 input[type="range"] { width: 100%; accent-color: var(--accent); }
 .controls { display: flex; justify-content: center; gap: 6px; margin: 8px 0 10px; }
 .controls button { width: 38px; height: 38px; border-radius: 50%; padding: 0; font-size: 14px; }
@@ -25,7 +28,11 @@ ul { list-style: none; margin: 8px 0 0; padding: 0; }
 li { display: flex; align-items: center; gap: 6px; padding: 5px 0; }
 li .grow { flex: 1; min-width: 0; }
 li .name { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-li .why { display: block; color: GrayText; font-size: 12px; }
+li .why { display: block; color: var(--muted); font-size: 12px; }
 li button { padding: 3px 9px; flex: 0 0 auto; }
 #sceneFrame iframe { width: 100%; height: 340px; border: 1px solid var(--line); border-radius: 8px; margin-top: 10px; display: block; background: #11141c; }
+button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 [hidden] { display: none !important; }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { transition: none !important; animation: none !important; scroll-behavior: auto !important; }
+}

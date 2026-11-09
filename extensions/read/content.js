@@ -124,7 +124,8 @@
     const margin = window.innerHeight * 0.2;
     if (rect.height === 0 || rect.top < margin || rect.bottom > window.innerHeight - margin) {
       const el = range.startContainer.parentElement;
-      if (el) el.scrollIntoView({ block: "center", behavior: "smooth" });
+      const still = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      if (el) el.scrollIntoView({ block: "center", behavior: still ? "auto" : "smooth" });
     }
   }
 
