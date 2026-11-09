@@ -32,6 +32,8 @@ final class AppModel: ObservableObject {
     @Published var suggestion: TaskItem?
     @Published var notice: BlockNotice?
     @Published private(set) var hasJevKey = false
+    /// Shortcuts macOS would not register, as labels such as "⌥Space".
+    @Published var hotkeyFailures: [String] = []
     @Published private(set) var hasClaudeKey = false
     @Published private(set) var voiceKeys: Set<String> = []
     @Published var cloudVoices: [CloudVoice] = []
@@ -206,6 +208,20 @@ final class AppModel: ObservableObject {
         return SetupChecklist(facts)
     }
 
+    /// The menu bar menu shows the chosen shortcuts.
+    var quickAddShortcut: KeyboardShortcut? { Self.shortcut(Hotkeys.choice(data.settings.quickAddHotkey, in: Hotkeys.quickAdd)) }
+    var timerShortcut: KeyboardShortcut? { Self.shortcut(Hotkeys.choice(data.settings.timerHotkey, in: Hotkeys.timer)) }
+
+    private static func shortcut(_ choice: HotkeyChoice?) -> KeyboardShortcut? {
+        guard let choice else { return nil }
+        var modifiers: EventModifiers = []
+        if choice.modifiers & HotkeyChoice.command != 0 { modifiers.insert(.command) }
+        if choice.modifiers & HotkeyChoice.shift != 0 { modifiers.insert(.shift) }
+        if choice.modifiers & HotkeyChoice.option != 0 { modifiers.insert(.option) }
+        if choice.modifiers & HotkeyChoice.control != 0 { modifiers.insert(.control) }
+        return KeyboardShortcut(KeyEquivalent(choice.character), modifiers: modifiers)
+    }
+
     var siteBlockingOff: Bool { mode.blocks && !shieldConnected }
     var shieldConnected: Bool { bridgeClients.contains("shield") }
     static let siteBlockingOffText = "Site blocking is off: Kairos Shield isn\u{2019}t connected, so your blocked sites open normally. Open Chrome (or another Chromium browser) with Kairos Shield loaded."
@@ -298,10 +314,7 @@ final class AppModel: ObservableObject {
     func switchGroup(_ id: UUID) {
         guard id != data.focus.activeGroupId, let next = data.group(id) else { return }
         let previous = data.activeGroup
-        var focus = data.focus
-        focus.activeGroupId = id
-        if let task = data.currentTask, task.groupId != id { focus.currentTaskId = nil }
-        data.focus = focus
+        data.focus = data.focusAfterSwitch(to: id)
         tempo.use(data.preset(named: next.tempoPreset))
         if next.desktop > 0 { AppDelegate.shared?.switchDesktop(next.desktop) }
         sweepSoon()

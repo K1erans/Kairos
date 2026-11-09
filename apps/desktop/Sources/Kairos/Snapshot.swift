@@ -92,6 +92,9 @@ enum Snapshot {
         // Every Settings section at once, tall enough that nothing scrolls.
         model.page = .settings
         shot("main-settings-full", size: CGSize(width: 1000, height: 3000), MainWindow())
+        model.hotkeyFailures = ["⌥Space"]
+        shot("main-settings-hotkey-taken", size: CGSize(width: 1000, height: 660), MainWindow())
+        model.hotkeyFailures = []
         model.page = .today
         model.setMode(.focus)
         shot("main-today-focus", size: CGSize(width: 1000, height: 660), MainWindow())

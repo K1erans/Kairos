@@ -97,10 +97,10 @@ struct MenuBarMenu: View {
         }
         Divider()
         if model.tempo.phase == .idle {
-            Button("Start focus") { model.requestStartFocus() }.keyboardShortcut(.space, modifiers: [.option, .shift])
+            Button("Start focus") { model.requestStartFocus() }.keyboardShortcut(model.timerShortcut)
         } else {
             Text("\(model.tempo.phase.label) · \(clock(model.remaining))")
-            Button(model.tempo.isPaused ? "Resume" : "Pause") { model.toggleTimer() }.keyboardShortcut(.space, modifiers: [.option, .shift])
+            Button(model.tempo.isPaused ? "Resume" : "Pause") { model.toggleTimer() }.keyboardShortcut(model.timerShortcut)
             Button("Skip") { model.requestSkip() }.disabled(model.strictLocked)
             Button("+5 min") { model.addFiveMinutes() }
             Button("Stop") { model.stopTimer() }.disabled(model.strictLocked)
@@ -116,7 +116,7 @@ struct MenuBarMenu: View {
         Button("New Group…") { DockActions.newGroup(model) }
         ModePicker()
         Divider()
-        Button("Quick add…") { AppDelegate.shared?.showQuickAdd() }.keyboardShortcut(.space, modifiers: .option)
+        Button("Quick add…") { AppDelegate.shared?.showQuickAdd() }.keyboardShortcut(model.quickAddShortcut)
         Button("Open Kairos") {
             openWindow(id: "main")
             NSApp.activate(ignoringOtherApps: true)
@@ -194,10 +194,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             alert.addButton(withTitle: "Cancel")
             return alert.runModal() == .alertFirstButtonReturn
         }
-        registerHotKeys(groups: model.data.settings.groupHotkeys)
+        registerHotKeys()
 
-        model.$data.map(\.settings.groupHotkeys).removeDuplicates().dropFirst()
-            .sink { [weak self] on in self?.registerHotKeys(groups: on) }
+        model.$data.map { HotkeyPlan($0.settings) }.removeDuplicates().dropFirst()
+            .sink { [weak self] _ in DispatchQueue.main.async { self?.registerHotKeys() } }
             .store(in: &cancellables)
         // Hiding Kairos Bar, by any route, brings the macOS Dock back until the bar returns.
         model.$data.map(\.settings.hidesSystemDock).removeDuplicates()
@@ -224,7 +224,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         pendingHotKeys?.cancel()
         let work = DispatchWorkItem { [weak self] in
             self?.pendingHotKeys = nil
-            self?.registerHotKeys(groups: AppModel.shared.data.settings.groupHotkeys)
+            self?.registerHotKeys()
         }
         pendingHotKeys = work
         let sent = Spaces.switchTo(number)
@@ -276,18 +276,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.windows.first { $0.identifier?.rawValue.hasPrefix("main") == true }?.makeKeyAndOrderFront(nil)
     }
 
-    private func registerHotKeys(groups: Bool) {
+    private func registerHotKeys() {
         // A desktop switch in flight re-registers when it is done.
         guard pendingHotKeys == nil else { return }
         hotKeys.removeAll()
-        hotKeys.register(keyCode: UInt32(kVK_Space), modifiers: UInt32(optionKey)) { [weak self] in self?.quickAdd?.toggle() }
-        // Start, pause or resume the timer from anywhere.
-        hotKeys.register(keyCode: UInt32(kVK_Space), modifiers: UInt32(optionKey | shiftKey)) { AppModel.shared.toggleTimer() }
-        guard groups else { return }
-        let digits = [kVK_ANSI_1, kVK_ANSI_2, kVK_ANSI_3, kVK_ANSI_4, kVK_ANSI_5, kVK_ANSI_6, kVK_ANSI_7, kVK_ANSI_8, kVK_ANSI_9]
-        for (i, code) in digits.enumerated() {
-            hotKeys.register(keyCode: UInt32(code), modifiers: UInt32(controlKey)) { AppModel.shared.switchGroup(index: i) }
+        var failed: [String] = []
+        for entry in HotkeyPlan(AppModel.shared.data.settings).entries {
+            let action: () -> Void
+            switch entry.action {
+            case .quickAdd: action = { [weak self] in self?.quickAdd?.toggle() }
+            case .timer: action = { AppModel.shared.toggleTimer() }
+            case let .group(i): action = { AppModel.shared.switchGroup(index: i) }
+            }
+            if !hotKeys.register(keyCode: entry.keyCode, modifiers: entry.modifiers, action: action) { failed.append(entry.label) }
         }
+        AppModel.shared.hotkeyFailures = failed
     }
 }
 
@@ -299,15 +302,18 @@ final class HotKeys {
     private static var installed = false
     private static var nextID: UInt32 = 1
 
-    func register(keyCode: UInt32, modifiers: UInt32, action: @escaping () -> Void) {
+    /// False when macOS refused, usually because another app holds the same shortcut.
+    @discardableResult
+    func register(keyCode: UInt32, modifiers: UInt32, action: @escaping () -> Void) -> Bool {
         Self.installHandler()
         let id = Self.nextID
         Self.nextID += 1
         var ref: EventHotKeyRef?
         let hkID = EventHotKeyID(signature: OSType(0x4B414952), id: id) // 'KAIR'
-        guard RegisterEventHotKey(keyCode, modifiers, hkID, GetApplicationEventTarget(), 0, &ref) == noErr, let ref else { return }
+        guard RegisterEventHotKey(keyCode, modifiers, hkID, GetApplicationEventTarget(), 0, &ref) == noErr, let ref else { return false }
         Self.handlers[id] = action
         refs.append(ref)
+        return true
     }
 
     func removeAll() {

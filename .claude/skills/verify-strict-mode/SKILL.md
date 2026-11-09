@@ -67,7 +67,7 @@ Covered: `OverrideLedger` in `apps/desktop/Sources/KairosCore/Rules.swift`; `Tem
 
 `requestStartFocus` and `requestSkip` ask before a strict focus phase starts. Agreeing is the model's `StartFocus` or `Skip`; cancelling changes nothing, so it is no step.
 
-Last confirmed in sync: 2026-11-09, recorded as file checksums in `verification/strict-mode/synced.sha256`, in the commit "Start the timer from a task and change the mode from Today" (its parent is fedf001). Write the commit hash here each time you run `--confirm`.
+Last confirmed in sync: 2026-11-09, recorded as file checksums in `verification/strict-mode/synced.sha256`, in the commit "Let the owner choose or turn off Kairos's shortcuts, and keep each group's task" (its parent is 0863e21). Write the commit hash here each time you run `--confirm`.
 
 ## What this does not cover
 

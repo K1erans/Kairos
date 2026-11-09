@@ -81,6 +81,19 @@ extension AppData {
     }
 
     /// Applies `change` to the active group, if there is one.
+    /// The focus state after switching to group `id`. The group being left remembers its current
+    /// task, and the task `id` remembered comes back if it is still open in that group.
+    public func focusAfterSwitch(to id: UUID) -> FocusState {
+        var focus = self.focus
+        if let old = focus.activeGroupId { focus.taskByGroup[old.uuidString] = focus.currentTaskId }
+        focus.activeGroupId = id
+        if currentTask?.groupId != id {
+            let remembered = focus.taskByGroup[id.uuidString].flatMap { tid in tasks.first { $0.id == tid } }
+            focus.currentTaskId = remembered.flatMap { $0.status == .todo && $0.groupId == id ? $0.id : nil }
+        }
+        return focus
+    }
+
     public mutating func updateActiveGroup(_ change: (inout AppGroup) -> Void) {
         guard let i = groups.firstIndex(where: { $0.id == activeGroup?.id }) else { return }
         change(&groups[i])

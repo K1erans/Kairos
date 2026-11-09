@@ -72,7 +72,9 @@ Claude.
   small LaunchAgent (`com.kairos.dock-watchdog`) brings the Dock back if Kairos stops without doing
   it, and is removed when the switch is turned off.
 
-Press Option-Space anywhere to add a task.
+Press Option-Space anywhere to add a task, and Option-Shift-Space to start or pause the timer.
+Settings > General changes or turns off both shortcuts. Control-1 to Control-9 can switch groups;
+that is off for new profiles because macOS can use those keys to switch desktops.
 
 ## Tests
 

@@ -817,7 +817,22 @@ struct SettingsPage: View {
                 Picker("When switching group", selection: $model.data.settings.switchBehavior) {
                     ForEach(SwitchBehavior.allCases, id: \.self) { Text($0.label).tag($0) }
                 }
-                Toggle("⌃1 to ⌃9 switch groups", isOn: $model.data.settings.groupHotkeys)
+                Picker("Quick add", selection: $model.data.settings.quickAddHotkey) {
+                    ForEach(Hotkeys.quickAdd) { Text($0.label).tag($0.id) }
+                    Text("Off").tag(Hotkeys.off)
+                }
+                Picker("Start or pause the timer", selection: $model.data.settings.timerHotkey) {
+                    ForEach(Hotkeys.timer) { Text($0.label).tag($0.id) }
+                    Text("Off").tag(Hotkeys.off)
+                }
+                VStack(alignment: .leading, spacing: 4) {
+                    Toggle("⌃1 to ⌃9 switch groups", isOn: $model.data.settings.groupHotkeys)
+                    Text("macOS can use these to switch desktops (Keyboard Shortcuts > Mission Control). While this is on, Kairos takes them.")
+                        .font(.callout).foregroundStyle(.secondary)
+                }
+                if let failure = HotkeyPlan.failureText(model.hotkeyFailures) {
+                    Label(failure, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                }
             }
             Section("Kairos Bar") {
                 Toggle("Show Kairos Bar", isOn: $model.data.settings.dockVisible)

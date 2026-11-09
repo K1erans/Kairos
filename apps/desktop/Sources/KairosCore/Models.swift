@@ -215,7 +215,12 @@ public struct Settings: Codable, Hashable, Sendable {
     public var overrideMinutes: Int = 5
     public var breakOverlay: Bool = true
     /// Control-1...9 switch groups. Off if it clashes with Mission Control shortcuts.
-    public var groupHotkeys: Bool = true
+    /// ⌃1 to ⌃9 switch groups. Off for new profiles: macOS uses them for "Switch to Desktop".
+    public var groupHotkeys: Bool = false
+    /// A `Hotkeys.quickAdd` id, or "off".
+    public var quickAddHotkey: String = "option-space"
+    /// A `Hotkeys.timer` id, or "off".
+    public var timerHotkey: String = "option-shift-space"
     public var voiceProvider: VoiceProvider = .system
     /// Voice id for the chosen cloud provider; empty means that provider's default.
     public var voiceId: String = ""
@@ -251,7 +256,7 @@ extension Settings: Lenient {
         .field("switchBehavior", \.switchBehavior), .field("presets", \.presets), .field("neverAnalyse", \.neverAnalyse),
         .field("jevFailClosed", \.jevFailClosed), .field("maxOverridesPerSession", \.maxOverridesPerSession),
         .field("overrideMinutes", \.overrideMinutes), .field("breakOverlay", \.breakOverlay),
-        .field("groupHotkeys", \.groupHotkeys), .field("voiceProvider", \.voiceProvider), .field("voiceId", \.voiceId),
+        .field("groupHotkeys", \.groupHotkeys), .field("quickAddHotkey", \.quickAddHotkey), .field("timerHotkey", \.timerHotkey), .field("voiceProvider", \.voiceProvider), .field("voiceId", \.voiceId),
         .field("autoHideBar", \.autoHideBar), .field("replacesSystemDock", \.replacesSystemDock),
         .field("blockUnshieldedBrowsers", \.blockUnshieldedBrowsers),
     ]
@@ -262,6 +267,8 @@ public struct FocusState: Codable, Hashable, Sendable {
     public var currentTaskId: UUID?
     public var mode: Mode = .off
     public var endsAt: Date?
+    /// Group id -> the task that was current when that group was last left.
+    public var taskByGroup: [String: UUID] = [:]
     /// While a strict focus phase is locked: when it ends (or, paused, would end if resumed now).
     /// Saved so that quitting or a crash cannot end it, and pushed so Chrome keeps enforcing it.
     public var strictUntil: Date?
@@ -272,7 +279,7 @@ extension FocusState: Lenient {
     public static var fallback: FocusState { FocusState() }
     public static let fields: [LenientField<FocusState>] = [
         .field("activeGroupId", \.activeGroupId), .field("currentTaskId", \.currentTaskId), .field("mode", \.mode),
-        .field("endsAt", \.endsAt), .field("strictUntil", \.strictUntil),
+        .field("endsAt", \.endsAt), .field("strictUntil", \.strictUntil), .field("taskByGroup", \.taskByGroup),
     ]
 }
 
