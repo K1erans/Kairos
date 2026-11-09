@@ -285,6 +285,10 @@ public struct AppData: Codable, Sendable {
     public var settings = Settings()
     public var focus = FocusState()
     public var onboarded = false
+    /// Extension clients ("shield", "read") that have connected at least once, for the setup list.
+    public var seenClients: [String] = []
+    /// The owner hid the setup list on Today.
+    public var setupHidden = false
     /// The timer phase running at the last save, kept so a quit or crash still logs it.
     public var openSession: Session?
     /// Kairos Read listening time while no task was current.
@@ -331,5 +335,6 @@ extension AppData: Lenient {
         .field("blockEvents", \.blockEvents), .field("settings", \.settings), .field("focus", \.focus),
         .field("onboarded", \.onboarded), .field("openSession", \.openSession),
         .field("unassignedListenedSec", \.unassignedListenedSec),
+        .field("seenClients", \.seenClients), .field("setupHidden", \.setupHidden),
     ]
 }

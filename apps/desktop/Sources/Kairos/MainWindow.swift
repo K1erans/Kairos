@@ -310,6 +310,9 @@ struct TodayPage: View {
                 if model.mode.blocks, let problem = model.jevReadiness(for: model.activeGroup).problem {
                     WarningBanner(systemImage: "exclamationmark.triangle.fill", text: problem) { EmptyView() }
                 }
+                if !model.data.setupHidden {
+                    SetupCard()
+                }
                 HStack {
                     Text("Group").font(.headline)
                     GroupPicker(selection: Binding(get: { model.data.focus.activeGroupId }, set: { if let id = $0 { model.switchGroup(id) } }))
@@ -331,6 +334,74 @@ struct TodayPage: View {
             .padding(16)
             .frame(maxWidth: .infinity, minHeight: 130, alignment: .topLeading)
             .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 14))
+    }
+}
+
+/// The setup list on Today, until everything is done or the owner hides it.
+struct SetupCard: View {
+    @EnvironmentObject var model: AppModel
+    @State private var accessibility = AXIsProcessTrusted()
+    @State private var openAtLogin = LoginItem.enabled
+
+    var body: some View {
+        let list = model.setupChecklist(accessibility: accessibility, openAtLogin: openAtLogin)
+        Group {
+            if !list.isComplete {
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack {
+                        Text("Set up Kairos").font(.headline)
+                        Text("\(list.doneCount) of \(list.items.count) done").foregroundStyle(.secondary).monospacedDigit()
+                        Spacer()
+                        Button("Hide") { model.data.setupHidden = true }
+                            .help("Everything here is also in Settings.")
+                    }
+                    ForEach(list.items) { item in row(item) }
+                }
+                .padding(16)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 14))
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            accessibility = AXIsProcessTrusted()
+            openAtLogin = LoginItem.enabled
+        }
+    }
+
+    private func row(_ item: SetupChecklist.Item) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Image(systemName: item.done ? "checkmark.circle.fill" : "circle")
+                .foregroundStyle(item.done ? Color.green : Color.secondary)
+                .accessibilityLabel(item.done ? "Done" : "Not done")
+            VStack(alignment: .leading, spacing: 2) {
+                Text(item.title).strikethrough(item.done, color: .secondary).foregroundStyle(item.done ? .secondary : .primary)
+                if !item.done { Text(item.detail).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true) }
+            }
+            Spacer(minLength: 8)
+            action(item)
+        }
+    }
+
+    @ViewBuilder private func action(_ item: SetupChecklist.Item) -> some View {
+        switch item.step {
+        case .shield, .read:
+            if !item.done, let folder = BridgeInstaller.extensionsFolder {
+                Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([folder]) }
+            }
+        case .jevKey, .claudeKey, .voiceKey:
+            if !item.done { Button("Add key…") { model.page = .settings } }
+        case .accessibility:
+            if !item.done {
+                Button("Allow…") { _ = AXIsProcessTrustedWithOptions(["AXTrustedCheckOptionPrompt": true] as CFDictionary) }
+            }
+        case .openAtLogin:
+            Toggle("", isOn: Binding(get: { openAtLogin }, set: { LoginItem.set($0); openAtLogin = LoginItem.enabled }))
+                .labelsHidden().toggleStyle(.switch).controlSize(.small)
+        case .dockReplacement:
+            Toggle("", isOn: Binding(get: { model.data.settings.replacesSystemDock },
+                                     set: { model.data.settings.setReplacesSystemDock($0) }))
+                .labelsHidden().toggleStyle(.switch).controlSize(.small)
+        }
     }
 }
 
@@ -875,17 +946,14 @@ struct OnboardingSheet: View {
             Text("Welcome to Kairos").font(.title.weight(.semibold))
             Text("Kairos shows only the apps for what you are doing, blocks the rest while you focus, and times your work.")
                 .foregroundStyle(.secondary)
-            step("1", "Groups", "You start with Work, Study and Personal. Switch from Kairos Bar or with ⌃1, ⌃2, ⌃3, and add one with the + on the bar.")
-            step("2", "Chrome bridge", browsers.isEmpty
-                ? "No Chromium browser profile was found yet. You can install the bridge later in Settings."
-                : "Installed for \(browsers.joined(separator: ", ")). Load the two extensions from Settings > Chrome bridge.")
-            step("3", "Window titles (optional)", "Letting Kairos read window titles helps Jev judge apps. Without it, only the app name is used.")
+            step("1", "Groups", "You start with Work, Study and Personal, each with its own apps, blocked sites and timer. Switch group from Kairos Bar or the menu bar, and add one with the + on the bar.")
+            step("2", "Tasks", "Press ⌥Space anywhere to add a task, like \u{201C}Draft report tomorrow 3pm\u{201D}. Pick one on Today and start a focus session.")
+            step("3", "Set up", browsers.isEmpty
+                ? "Today lists what is left to set up: the Kairos Shield extension (no Chromium browser was found yet), keys for Jev and scenes, and window titles."
+                : "Today lists what is left to set up: loading the Kairos Shield and Kairos Read extensions, keys for Jev and scenes, and window titles. The browser link is installed for \(browsers.joined(separator: ", ")).")
             HStack {
-                Button("Allow window titles…") {
-                    _ = AXIsProcessTrustedWithOptions(["AXTrustedCheckOptionPrompt": true] as CFDictionary)
-                }
                 Spacer()
-                Button("Get started") { model.data.onboarded = true }.keyboardShortcut(.defaultAction)
+                Button("Go to Today") { model.page = .today; model.data.onboarded = true }.keyboardShortcut(.defaultAction)
             }
         }
         .padding(26)

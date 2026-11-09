@@ -193,6 +193,19 @@ final class AppModel: ObservableObject {
     var overridesLeft: Int { ledger.remaining(max: data.settings.maxOverridesPerSession) }
 
     /// Blocking is on but no Kairos Shield is connected, so no site rule is enforced anywhere.
+    func setupChecklist(accessibility: Bool, openAtLogin: Bool) -> SetupChecklist {
+        var facts = SetupFacts()
+        facts.seenClients = Set(data.seenClients).union(bridgeClients)
+        facts.hasJevKey = hasJevKey
+        facts.hasClaudeKey = hasClaudeKey
+        facts.voiceProvider = data.settings.voiceProvider
+        facts.hasVoiceKey = data.settings.voiceProvider.keyAccount.map { voiceKeys.contains($0) } ?? false
+        facts.accessibility = accessibility
+        facts.openAtLogin = openAtLogin
+        facts.replacesDock = data.settings.replacesSystemDock
+        return SetupChecklist(facts)
+    }
+
     var siteBlockingOff: Bool { mode.blocks && !shieldConnected }
     var shieldConnected: Bool { bridgeClients.contains("shield") }
     static let siteBlockingOffText = "Site blocking is off: Kairos Shield isn\u{2019}t connected, so your blocked sites open normally. Open Chrome (or another Chromium browser) with Kairos Shield loaded."
@@ -639,6 +652,9 @@ final class AppModel: ObservableObject {
         switch type {
         case "hello":
             bridge.setName(str("client"), for: client)
+            if ["shield", "read"].contains(str("client")), !data.seenClients.contains(str("client")) {
+                data.seenClients.append(str("client"))
+            }
             reply(stateMessage)
         case "getState":
             reply(stateMessage)
