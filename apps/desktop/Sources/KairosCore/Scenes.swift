@@ -135,9 +135,11 @@ public final class SceneWriter: @unchecked Sendable {
                 if let delta = obj["delta"] as? [String: Any], delta["type"] as? String == "text_delta",
                    let t = delta["text"] as? String { text += t }
             case "content_block_start":
-                // A fallback block marks the point where another model took over: what the
-                // declined model wrote before it is discarded.
-                if let block = obj["content_block"] as? [String: Any], block["type"] as? String == "fallback" { text = "" }
+                // A `fallback` block marks where another model took over. On a stream the partial
+                // before it is kept and the fallback model continues it, so nothing is dropped here.
+                // Only a final `refusal` stop (every model declined) discards the text, in result().
+                if let block = obj["content_block"] as? [String: Any], block["type"] as? String == "text",
+                   let t = block["text"] as? String { text += t }
             case "message_delta":
                 if let delta = obj["delta"] as? [String: Any] {
                     if let r = delta["stop_reason"] as? String { stopReason = r }
