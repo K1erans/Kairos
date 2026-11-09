@@ -223,6 +223,17 @@ def main():
         pushed = (host.latest_state() or {}).get("rules", {}).get("hiddenElements", {}).get("news.com")
         check("rule.removeElement pushes state without being asked", pushed == ["#b"], f"pushed news.com={pushed}")
 
+        # rule.addSite puts the site on one list of the active group, takes it off the other, and pushes state.
+        host.send({"type": "rule.addSite", "site": "https://www.news.example/today", "list": "block"})
+        host.send({"type": "rule.addSite", "site": "reddit.com", "list": "allow"})
+        def lists():
+            rules = (host.latest_state() or {}).get("rules", {})
+            return rules.get("blockSites", []), rules.get("allowSites", [])
+        wait_for(lambda: "news.example" in lists()[0] and "reddit.com" in lists()[1], 3)
+        block, allow = lists()
+        check("rule.addSite blocks one site and moves another to the allow list",
+              "news.example" in block and "reddit.com" in allow and "reddit.com" not in block, f"block {block}, allow {allow}")
+
         # D4: the override marks the event for the site that was allowed, not the newest one.
         host.send({"type": "blockEvent", "target": "https://www.youtube.com/watch?v=1", "layer": "rule", "overridden": False})
         host.send({"type": "blockEvent", "target": "https://reddit.com/r/all", "layer": "rule", "overridden": False})

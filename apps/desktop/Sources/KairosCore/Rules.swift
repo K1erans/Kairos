@@ -103,3 +103,43 @@ public enum BridgeState {
         ]
     }
 }
+
+/// The two site lists of a group.
+public enum SiteList: String, Sendable {
+    case block, allow
+}
+
+extension AppData {
+    /// `rule.addSite`: Kairos Shield's "Block this site" and the Jev overlay's "Always allow".
+    /// The site goes on one list of the active group and off the other. An allow loosens
+    /// blocking, so like an "Allow" override it is refused while a strict focus phase is locked.
+    /// Returns false when nothing changed.
+    @discardableResult
+    public mutating func addSite(_ raw: String, to list: SiteList, strictLocked: Bool) -> Bool {
+        let site = Rules.normalizeSite(raw)
+        guard !site.isEmpty, !(list == .allow && strictLocked), let group = activeGroup else { return false }
+        var g = group
+        switch list {
+        case .block:
+            g.allowSites.removeAll { $0 == site }
+            if !g.blockSites.contains(site) { g.blockSites.append(site) }
+        case .allow:
+            g.blockSites.removeAll { $0 == site }
+            if !g.allowSites.contains(site) { g.allowSites.append(site) }
+        }
+        guard g != group else { return false }
+        updateActiveGroup { $0 = g }
+        return true
+    }
+
+    /// "Block in <group>" from Kairos Bar. Unblocking loosens blocking, so it waits while a strict
+    /// focus phase is locked. Returns false when nothing changed.
+    @discardableResult
+    public mutating func setAppBlocked(_ bundleId: String, _ blocked: Bool, strictLocked: Bool) -> Bool {
+        guard let group = activeGroup, group.blockedApps.contains(bundleId) != blocked, blocked || !strictLocked else { return false }
+        updateActiveGroup { g in
+            if blocked { g.blockedApps.append(bundleId) } else { g.blockedApps.removeAll { $0 == bundleId } }
+        }
+        return true
+    }
+}

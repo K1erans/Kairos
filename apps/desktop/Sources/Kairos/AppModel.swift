@@ -372,6 +372,13 @@ final class AppModel: ObservableObject {
         data.groups[i].dockApps.append(bundleId)
     }
 
+    /// "Block in <group>" from Kairos Bar. A newly blocked app on screen is hidden at once.
+    func setAppBlocked(_ bundleId: String, _ blocked: Bool) {
+        if data.setAppBlocked(bundleId, blocked, strictLocked: strictLocked), blocked { sweepSoon() }
+    }
+
+    func isAppBlocked(_ bundleId: String) -> Bool { activeGroup?.blockedApps.contains(bundleId) ?? false }
+
     func removeDockApp(_ bundleId: String) {
         guard let i = data.groups.firstIndex(where: { $0.id == data.focus.activeGroupId }) else { return }
         data.groups[i].dockApps.removeAll { $0 == bundleId }
@@ -684,6 +691,10 @@ final class AppModel: ObservableObject {
             let host = Rules.normalizeSite(str("host")), selector = str("selector")
             guard !host.isEmpty, !selector.isEmpty else { return }
             data.updateActiveGroup { $0.hideElement(selector, on: host) }
+        case "rule.addSite":
+            guard let list = SiteList(rawValue: str("list")) else { return }
+            // A refused allow (Strict) changes nothing; the push tells the extension so.
+            if !data.addSite(str("site"), to: list, strictLocked: strictLocked) { pushState(force: true) }
         case "rule.removeElement":
             let host = Rules.normalizeSite(str("host")), selector = str("selector")
             guard !host.isEmpty, !selector.isEmpty else { return }

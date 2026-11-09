@@ -401,6 +401,7 @@ struct DockView: View {
                 .onTapGesture { Apps.open(bundleId) }
                 .contextMenu {
                     Button("Keep in \(model.activeGroup?.name ?? "Group")") { model.addDockApp(bundleId) }
+                    blockButton(bundleId)
                     Divider()
                     Button("Show") { Apps.open(bundleId) }
                     Button("Hide") { Apps.running(bundleId)?.hide() }
@@ -597,7 +598,19 @@ struct DockView: View {
             Button("Quit") { Apps.running(bundleId)?.terminate() }
         }
         Divider()
+        blockButton(bundleId)
         Button("Remove from \(model.activeGroup?.name ?? "group")") { model.removeDockApp(bundleId) }
+    }
+
+    /// Blocks the app in the active group, or unblocks it (not while Strict is locked).
+    @ViewBuilder
+    private func blockButton(_ bundleId: String) -> some View {
+        let group = model.activeGroup?.name ?? "group"
+        if model.isAppBlocked(bundleId) {
+            Button("Unblock in \(group)") { model.setAppBlocked(bundleId, false) }.disabled(model.strictLocked)
+        } else {
+            Button("Block in \(group)") { model.setAppBlocked(bundleId, true) }
+        }
     }
 }
 
