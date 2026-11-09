@@ -107,7 +107,13 @@ final class OverlayController {
             guard let self else { return }
             guard let notice else { self.panel.orderOut(nil); return }
             if let screen = Self.screen(for: notice.screen) { self.panel.setFrame(screen.frame, display: true) }
-            self.panel.makeKeyAndOrderFront(nil)
+            if notice.kind == .rest {
+                // A break arrives while the owner may be typing: show it without taking the keyboard.
+                self.panel.orderFrontRegardless()
+            } else {
+                // The blocked app was just hidden; the reason field needs the keyboard.
+                self.panel.makeKeyAndOrderFront(nil)
+            }
         }
     }
 }
@@ -121,8 +127,21 @@ extension OverlayController {
 
 struct OverlayView: View {
     @EnvironmentObject var model: AppModel
-    @State private var reason = ""
+    @State private var reason: String
     @State private var error: String?
+
+    init(reason: String = "") { _reason = State(initialValue: reason) }
+
+    /// Once a reason is typed, Return means "Allow"; before that it means "Back to work".
+    private var allowIsDefault: Bool {
+        model.noticeCanOverride && !reason.trimmingCharacters(in: .whitespaces).isEmpty
+    }
+
+    private func allow() {
+        guard allowIsDefault, model.notice != nil else { return }
+        error = model.overrideNotice(reason: reason)
+        if error == nil { reason = "" }
+    }
 
     var body: some View {
         ZStack {
@@ -144,16 +163,15 @@ struct OverlayView: View {
                         }
                     } else {
                         Button(model.currentTask.map { "Back to \u{201C}\($0.title)\u{201D}" } ?? "Back to work") { model.notice = nil }
-                            .keyboardShortcut(.defaultAction)
+                            .keyboardShortcut(allowIsDefault ? nil : .defaultAction)
                             .controlSize(.large)
                         if model.noticeCanOverride {
                             Divider().frame(width: 260)
                             TextField("Why do you need it?", text: $reason).textFieldStyle(.roundedBorder).frame(width: 260)
-                            Button("Allow \(model.data.settings.overrideMinutes) min (\(model.overridesLeft) left)") {
-                                error = model.overrideNotice(reason: reason)
-                                if error == nil { reason = "" }
-                            }
-                            .disabled(reason.trimmingCharacters(in: .whitespaces).isEmpty)
+                                .onSubmit(allow)
+                            Button("Allow \(model.data.settings.overrideMinutes) min (\(model.overridesLeft) left)", action: allow)
+                                .keyboardShortcut(allowIsDefault ? .defaultAction : nil)
+                                .disabled(!allowIsDefault)
                         } else if model.mode == .strict {
                             Text("Strict mode: no overrides until this session ends.").font(.caption).foregroundStyle(.secondary)
                         }

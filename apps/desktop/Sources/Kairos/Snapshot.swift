@@ -113,6 +113,7 @@ enum Snapshot {
         model.notice = BlockNotice(kind: .app(bundleId: "com.hnc.Discord"), title: "Discord is hidden",
                                    detail: "Discord is blocked in Work.")
         shot("overlay-block", size: CGSize(width: 900, height: 600), OverlayView().background(Wallpaper()))
+        shot("overlay-block-reason-typed", size: CGSize(width: 900, height: 600), OverlayView(reason: "Need the API docs").background(Wallpaper()))
         let allowed = model.data.settings.maxOverridesPerSession
         model.data.settings.maxOverridesPerSession = 0 // overrides used up: no "Allow"
         shot("overlay-block-no-overrides", size: CGSize(width: 900, height: 600), OverlayView().background(Wallpaper()))
