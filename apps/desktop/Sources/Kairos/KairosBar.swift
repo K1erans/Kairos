@@ -124,8 +124,11 @@ final class DockPanelController {
     private let tracker: DockTracker
     private var cancellables: Set<AnyCancellable> = []
     private var monitors: [Any] = []
-    /// Nil while auto-hide is off.
-    private var autoHide: DockAutoHide?
+    /// Whether the bar is out: pinned, auto-hiding, or out of the way of a full-screen app.
+    private var visibility = DockAutoHide(rule: .pinned, now: Date())
+    /// A full-screen app has the active Space on the bar's screen.
+    private var fullScreen = false
+    private var rule: DockAutoHide.Rule { .init(autoHide: model.data.settings.autoHideBar, fullScreen: fullScreen) }
     private var menuOpen = false
     private var frameTimer: Timer?
     private var decisionTimer: Timer?
@@ -162,13 +165,16 @@ final class DockPanelController {
             .sink { [weak self] _ in DispatchQueue.main.async { self?.layout() } }
             .store(in: &cancellables)
         NotificationCenter.default.publisher(for: NSApplication.didChangeScreenParametersNotification)
-            .sink { [weak self] _ in self?.layout() }
+            .sink { [weak self] _ in self?.layout(); self?.spaceMayHaveChanged() }
             .store(in: &cancellables)
+        // A swipe to another Space, or an app coming forward, may put a full-screen app in front.
+        for name in [NSWorkspace.activeSpaceDidChangeNotification, NSWorkspace.didActivateApplicationNotification] {
+            NSWorkspace.shared.notificationCenter.publisher(for: name)
+                .sink { [weak self] _ in self?.spaceMayHaveChanged() }
+                .store(in: &cancellables)
+        }
         model.$data.map(\.settings.autoHideBar).removeDuplicates()
-            .sink { [weak self] on in
-                self?.autoHide = on ? DockAutoHide(now: Date()) : nil
-                DispatchQueue.main.async { self?.pointerMoved() }
-            }
+            .sink { [weak self] _ in DispatchQueue.main.async { self?.pointerMoved() } }
             .store(in: &cancellables)
         // A context menu holds the bar out while it is open.
         for (name, open) in [(NSMenu.didBeginTrackingNotification, true), (NSMenu.didEndTrackingNotification, false)] {
@@ -181,14 +187,15 @@ final class DockPanelController {
             .store(in: &cancellables)
 
         let events: NSEvent.EventTypeMask = [.mouseMoved, .leftMouseDragged, .rightMouseDragged]
-        if let m = NSEvent.addGlobalMonitorForEvents(matching: events, handler: { [weak self] _ in
-            MainActor.assumeIsolated { self?.pointerMoved() }
+        if let m = NSEvent.addGlobalMonitorForEvents(matching: events, handler: { [weak self] event in
+            MainActor.assumeIsolated { self?.pointerMoved(event) }
         }) { monitors.append(m) }
         if let m = NSEvent.addLocalMonitorForEvents(matching: events, handler: { [weak self] event in
-            MainActor.assumeIsolated { self?.pointerMoved() }
+            MainActor.assumeIsolated { self?.pointerMoved(event) }
             return event
         }) { monitors.append(m) }
         layout()
+        refreshFullScreen()
     }
 
     /// The menu bar's screen. NSScreen.main follows the key window, so the bar would jump
@@ -219,36 +226,71 @@ final class DockPanelController {
         pointerMoved()
     }
 
-    private func pointerMoved() {
+    /// The window list can trail a Space change, so look again shortly after.
+    private func spaceMayHaveChanged() {
+        refreshFullScreen()
+        for delay in [0.3, 1.0] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in self?.refreshFullScreen() }
+        }
+    }
+
+    private func refreshFullScreen() {
+        guard let screen else { return }
+        let now = Self.fullScreen(on: screen)
+        guard now != fullScreen else { return }
+        fullScreen = now
+        pointerMoved()
+    }
+
+    /// From the window list's bounds, which need no permission, and the menu bar (FullScreenSpace).
+    private static func fullScreen(on screen: NSScreen) -> Bool {
+        guard let id = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber,
+              let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]]
+        else { return false }
+        let windows = list.compactMap { info -> FullScreenSpace.Window? in
+            guard let layer = info[kCGWindowLayer as String] as? Int,
+                  let dict = info[kCGWindowBounds as String] as? NSDictionary,
+                  let bounds = CGRect(dictionaryRepresentation: dict) else { return nil }
+            return FullScreenSpace.Window(layer: layer, bounds: bounds, alpha: info[kCGWindowAlpha as String] as? Double ?? 1)
+        }
+        return FullScreenSpace.detect(windows: windows, display: CGDisplayBounds(id.uint32Value), topInset: screen.safeAreaInsets.top,
+                                      visibleReachesTop: screen.visibleFrame.maxY >= screen.frame.maxY - 0.5)
+    }
+
+    /// How far a pointer event moved toward the bar's screen edge.
+    private func push(_ event: NSEvent) -> Double {
+        switch tracker.frame.edge {
+        case .left: return -event.deltaX
+        case .right: return event.deltaX
+        case .bottom: return event.deltaY
+        }
+    }
+
+    private func pointerMoved(_ event: NSEvent? = nil) {
         guard panel.isVisible, let screen else { return }
         let now = Date()
         let mouse = NSEvent.mouseLocation, fr = panel.frame
         let (axis, cross) = tracker.frame.bar(CGPoint(x: mouse.x - fr.minX, y: fr.maxY - mouse.y))
         let g = tracker.frame.geometry
         let onBar = g.engages(axis: axis, cross: cross, inset: DockFrame.inset, engaged: tracker.pointer != nil)
-        if var hide = autoHide {
-            let fromEdge: Double
-            switch tracker.frame.edge {
-            case .left: fromEdge = mouse.x - screen.frame.minX
-            case .right: fromEdge = screen.frame.maxX - mouse.x
-            case .bottom: fromEdge = mouse.y - screen.frame.minY
-            }
-            hide.update(.init(atEdge: g.touchesEdge(axis: axis, fromEdge: fromEdge), onBar: onBar,
-                              held: menuOpen || tracker.resizing || tracker.dropTargeted), now: now)
-            autoHide = hide
-            let reveal = hide.visible(at: now)
-            if reveal != tracker.reveal { tracker.reveal = reveal }
-            schedule(hide)
-        } else {
-            frameTimer?.invalidate(); frameTimer = nil
-            decisionTimer?.invalidate(); decisionTimer = nil
-            if tracker.reveal != 1 { tracker.reveal = 1 }
+        let fromEdge: Double
+        switch tracker.frame.edge {
+        case .left: fromEdge = mouse.x - screen.frame.minX
+        case .right: fromEdge = screen.frame.maxX - mouse.x
+        case .bottom: fromEdge = mouse.y - screen.frame.minY
         }
+        visibility.update(.init(atEdge: g.touchesEdge(axis: axis, fromEdge: fromEdge), onBar: onBar,
+                                held: menuOpen || tracker.resizing || tracker.dropTargeted,
+                                pushed: event.map(push) ?? 0 > 0),
+                          rule: rule, now: now)
+        let reveal = visibility.visible(at: now)
+        if reveal != tracker.reveal { tracker.reveal = reveal }
+        schedule(visibility)
         if tracker.resizing {
             panel.ignoresMouseEvents = false
             return
         }
-        let on = onBar && autoHide?.isOut ?? true
+        let on = onBar && visibility.isOut
         if panel.ignoresMouseEvents == on { panel.ignoresMouseEvents = !on }
         let next = on ? axis : nil
         guard next != tracker.pointer else { return }
