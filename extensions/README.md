@@ -39,6 +39,7 @@ each manifest, so they are the same on every machine.
 - `test/harness.js` in each extension runs `background.js` under node against a fake `chrome`.
 - Scenes run in `read/sandbox.html`, a manifest sandbox page with no extension APIs. The side panel
   hands it the packaged three.js sources; the page turns them into `blob:` URLs and rewrites the
-  scene's import map, so scenes work offline. `https://unpkg.com` is allowed as a fallback.
+  scene's import map, so scenes work offline. Its CSP is `default-src 'none'`: scene code cannot fetch,
+  open sockets, load remote scripts or images, or navigate the frame away.
 - When Kairos Desktop is not running, Shield keeps the last known mode (with a manual switch in the
   popup) and Read still reads; 3D scenes and Jev need the app.

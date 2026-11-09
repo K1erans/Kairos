@@ -8,7 +8,7 @@ const IMPORTMAP_RE = /<script\b[^>]*\btype\s*=\s*(["'])importmap\1[^>]*>([\s\S]*
  * @param {string} html scene document
  * @param {{three: string, orbit: string}} urls replacement URLs (blob: URLs in the sandbox page)
  * @returns {string} html with "three" and the OrbitControls specifier pointed at urls;
- *          other entries (the unpkg "three/addons/" prefix) are kept as a network fallback
+ *          other entries (the unpkg "three/addons/" prefix) are kept as written; the sandbox CSP refuses the network, so only the two blob: entries resolve
  */
 export function rewriteImportMap(html, urls) {
   const source = String(html || "");
