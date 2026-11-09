@@ -84,6 +84,7 @@ export const EMPTY_STATE = Object.freeze({
   endsAt: null,
   overridesLeft: 0,
   strictUntil: null,
+  overrideMinutes: 5,
   cloudVoice: null,
   rules: {
     blockSites: [],
@@ -109,6 +110,7 @@ export function sanitizeState(raw) {
     currentTask: s.currentTask && typeof s.currentTask.title === "string" ? s.currentTask : null,
     endsAt: typeof s.endsAt === "number" ? s.endsAt : null,
     overridesLeft: typeof s.overridesLeft === "number" ? s.overridesLeft : 0,
+    overrideMinutes: typeof s.overrideMinutes === "number" && s.overrideMinutes >= 1 && s.overrideMinutes <= 24 * 60 ? Math.round(s.overrideMinutes) : 5,
     strictUntil: typeof s.strictUntil === "number" ? s.strictUntil : null,
     cloudVoice: s.cloudVoice && typeof s.cloudVoice.name === "string" && s.cloudVoice.name ? { provider: String(s.cloudVoice.provider || ""), name: s.cloudVoice.name } : null,
     rules: {
@@ -126,6 +128,11 @@ export function sanitizeState(raw) {
 /** When a locked strict phase ends (ms), or null when no lock is in force at `now`. See "Limits and conventions" in PROTOCOL.md. */
 export function strictLockUntil(state, now = Date.now()) {
   return state && typeof state.strictUntil === "number" && state.strictUntil > now ? state.strictUntil : null;
+}
+
+/** "5 minutes" / "1 minute", for the labels that offer an override. */
+export function minutesText(minutes) {
+  return minutes === 1 ? "1 minute" : `${minutes} minutes`;
 }
 
 export function formatTimeLeft(endsAt, now = Date.now()) {

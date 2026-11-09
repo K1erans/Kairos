@@ -212,3 +212,27 @@ test("a bad host or list is refused", async (t) => {
   assert.equal((await h.send({ type: "site.add", host: "blog.example", list: "both" })).ok, false);
   assert.equal(h.sent("rule.addSite").length, 0);
 });
+
+// ---- override length --------------------------------------------------------------------------
+
+test("page info carries the app's override length, defaulting to 5 minutes", async (t) => {
+  const state = { current: focus({ overrideMinutes: 12 }) };
+  const h = await startShield({ app: fakeApp(() => state.current) });
+  t.after(() => h.dispose());
+  assert.equal((await h.send({ type: "page.query", url: BLOG })).overrideMinutes, 12);
+  await h.push(focus());
+  assert.equal((await h.send({ type: "page.query", url: BLOG })).overrideMinutes, 5);
+  await h.push(focus({ overrideMinutes: -3 }));
+  assert.equal((await h.send({ type: "page.query", url: BLOG })).overrideMinutes, 5, "nonsense falls back");
+});
+
+test("an override granted while the app is away lasts the length the app last reported", async (t) => {
+  const state = { current: focus({ overrideMinutes: 10 }) };
+  const h = await startShield({ app: fakeApp(() => state.current) });
+  t.after(() => h.dispose());
+  await h.drop();
+  const before = Date.now();
+  const reply = await h.send({ type: "override", target: "youtube.com", reason: "docs" });
+  assert.equal(reply.allowed, true);
+  assert.ok(Math.abs(reply.until - (before + 10 * 60_000)) < 5000, `until ${reply.until - before}`);
+});

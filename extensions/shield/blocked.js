@@ -1,4 +1,4 @@
-import { formatTimeLeft, hostnameOf } from "./lib/match.js";
+import { formatTimeLeft, hostnameOf, minutesText } from "./lib/match.js";
 import { originalUrlFromHash } from "./lib/rules.js";
 
 const original = originalUrlFromHash(location.hash);
@@ -22,6 +22,9 @@ function render() {
   $("group").textContent = info.groupName;
   $("group").style.background = info.groupColor || "#2a2f3c";
   $("time").textContent = formatTimeLeft(info.endsAt);
+  const minutes = info.overrideMinutes || 5;
+  $("allow").textContent = `Allow ${minutes} min`;
+  $("submit").textContent = `Allow for ${minutesText(minutes)}`;
   $("allow").disabled = !info.canOverride || !wasBlocked;
   if (!wasBlocked) {
     $("form").hidden = true;

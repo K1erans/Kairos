@@ -22,7 +22,6 @@ import {
 const VERSION = chrome.runtime.getManifest().version;
 const BLOCKED_PAGE = chrome.runtime.getURL("blocked.html");
 const EXPIRY_ALARM = "kairos-temp-allow-expiry";
-const LOCAL_OVERRIDE_MS = 5 * 60 * 1000;
 
 let appState = sanitizeState(EMPTY_STATE); // last state pushed by Kairos Desktop
 let manualMode = null; // used only while the app is disconnected
@@ -160,6 +159,7 @@ function pageInfo(url, incognito = false) {
     task: state.currentTask ? state.currentTask.title : "",
     endsAt: state.endsAt,
     overridesLeft: state.overridesLeft,
+    overrideMinutes: state.overrideMinutes,
     canOverride: canOverride(state) && (!connected || state.overridesLeft > 0),
     verdict: siteVerdict(url, state),
     selectors: selectorsForHost(host, state, localElements),
@@ -213,11 +213,11 @@ async function requestOverride(target, reason) {
       return { allowed: false, message: err.message };
     }
   } else {
-    // Kairos Desktop is away, so nothing is counting overrides; allow the 5 minutes locally.
-    result = { allowed: true, until: Date.now() + LOCAL_OVERRIDE_MS, remaining: 0 };
+    // Kairos Desktop is away, so nothing is counting overrides; allow the length it last reported locally.
+    result = { allowed: true, until: Date.now() + state.overrideMinutes * 60_000, remaining: 0 };
   }
   if (result.allowed) {
-    const until = typeof result.until === "number" ? result.until : Date.now() + LOCAL_OVERRIDE_MS;
+    const until = typeof result.until === "number" ? result.until : Date.now() + state.overrideMinutes * 60_000;
     localAllows = { ...pruneAllows(localAllows), [host]: until };
     await chrome.storage.local.set({ localAllows });
     await applyState();

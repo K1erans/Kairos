@@ -159,7 +159,7 @@
           </div>
           <form>
             <input type="text" maxlength="200" placeholder="Why do you need this page?" aria-label="Reason" />
-            <button class="quiet" type="submit">Allow for 5 minutes</button>
+            <button class="quiet submit" type="submit">Allow for 5 minutes</button>
           </form>
           <div class="note" aria-live="polite"></div>
         </div>
@@ -170,6 +170,7 @@
     const note = root.querySelector(".note");
     const allow = root.querySelector(".allow");
     const always = root.querySelector(".always");
+    const submit = root.querySelector(".submit");
     const form = root.querySelector("form");
     const input = root.querySelector("input");
     const tick = () => {
@@ -179,6 +180,9 @@
     tick();
     // Rebuilt from the latest page info whenever the state changes while the overlay is up.
     const update = () => {
+      const minutes = info.overrideMinutes || 5;
+      allow.textContent = `Allow ${minutes} min`;
+      submit.textContent = `Allow for ${minutes === 1 ? "1 minute" : `${minutes} minutes`}`;
       always.hidden = info.mode === "strict"; // an allow-for-good is not a way out of strict
       allow.disabled = !info.canOverride;
       if (info.canOverride) {
