@@ -827,8 +827,10 @@ struct SettingsPage: View {
                     .font(.callout).foregroundStyle(.secondary)
             }
             Section("Privacy") {
-                StringListEditor(title: "Never send these sites to Jev", placeholder: "mybank.com",
+                StringListEditor(title: "Never send off this Mac", placeholder: "mybank.com",
                                  items: $model.data.settings.neverAnalyse, normalize: Rules.normalizeSite)
+                Text("Jev never sees these sites, Kairos Read reads them with a Mac voice and makes no scenes from them. Jev is only told a browser\u{2019}s name, never its page title.")
+                    .font(.callout).foregroundStyle(.secondary)
             }
             Section("Data") {
                 Button("Export everything as JSON…") { export() }

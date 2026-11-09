@@ -472,9 +472,8 @@ final class AppModel: ObservableObject {
         // Jev judges apps that are on no list. Apps in the group's dock are trusted.
         guard group.jevEnabled, hasJevKey, !group.dockApps.contains(bid), bid != Bundle.main.bundleIdentifier,
               !AppGuard.neverGuard.contains(bid), !ledger.isAllowed(bid, now: now), let task = currentTask else { return }
-        var subject = JevClient.Subject(kind: "app")
-        subject.app = name
-        subject.title = Apps.frontWindowTitle(pid: app.processIdentifier) ?? ""
+        let windowTitle = Apps.frontWindowTitle(pid: app.processIdentifier) ?? ""
+        let subject = Privacy.appSubject(name: name, bundleId: bid, windowTitle: windowTitle)
         let key = Keychain.get("typesafe")
         let threshold = group.jevThreshold
         Task {
@@ -489,7 +488,7 @@ final class AppModel: ObservableObject {
             // Only act if the window Jev judged is still in front and we are still blocking.
             guard verdict.shouldBlock(threshold: threshold), self.mode.blocks,
                   NSWorkspace.shared.frontmostApplication?.bundleIdentifier == bid,
-                  (Apps.frontWindowTitle(pid: app.processIdentifier) ?? "") == subject.title,
+                  (Apps.frontWindowTitle(pid: app.processIdentifier) ?? "") == windowTitle,
                   !self.ledger.isAllowed(bid, now: Date()) else { return }
             self.block(app, name: name, layer: "jev", detail: "Jev thinks \(name) is a distraction from your task.")
         }
@@ -631,6 +630,11 @@ final class AppModel: ObservableObject {
             bridge.send(p, to: client)
         }
         let stateMessage: [String: Any] = ["type": "state", "state": BridgeState.payload(data: data, ledger: ledger, cloudVoice: cloudVoiceReady)]
+        if let refusal = Privacy.refusal(m, neverAnalyse: data.settings.neverAnalyse) {
+            // tts.prefetch has no id and expects no answer, so it is simply dropped.
+            if id != nil { reply(["type": "error", "message": refusal]) }
+            return
+        }
 
         switch type {
         case "hello":

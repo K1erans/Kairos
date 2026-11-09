@@ -239,6 +239,15 @@ def main():
               d.get("unassignedListenedSec") == 30 and listened == [0],
               f"unassigned={d.get('unassignedListenedSec')} task listenedSec={listened}")
 
+        # Privacy: the app refuses cloud voice for a page on the never-analyse list (the default
+        # list has mail.google.com). The scratch profile has no cloud voice, so without the check
+        # this would still be an error, but one that does not name the site.
+        host.send({"type": "tts.speak", "id": "p1", "text": "You have 3 new emails.", "rate": 1,
+                   "url": "https://mail.google.com/mail/u/0/#inbox"})
+        r = host.reply("p1")
+        check("tts.speak for a never-analyse page is refused with an error naming the site",
+              r is not None and r.get("type") == "error" and "mail.google.com" in r.get("message", ""), json.dumps(r))
+
         # D1: a second launch on the same profile hands off and exits; the first keeps the socket.
         second = subprocess.Popen([os.path.join(APP, "Contents/MacOS/Kairos")], env=ENV,
                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)

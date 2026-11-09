@@ -89,6 +89,9 @@ enum Snapshot {
             shot("main-\(page.rawValue.lowercased())", size: CGSize(width: 1000, height: 660), MainWindow())
             shot("main-\(page.rawValue.lowercased())-min", size: CGSize(width: 860, height: 560), MainWindow())
         }
+        // Every Settings section at once, tall enough that nothing scrolls.
+        model.page = .settings
+        shot("main-settings-full", size: CGSize(width: 1000, height: 3000), MainWindow())
         model.page = .today
         model.setMode(.focus)
         shot("main-today-focus", size: CGSize(width: 1000, height: 660), MainWindow())
