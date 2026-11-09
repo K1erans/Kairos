@@ -140,7 +140,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var overlay: OverlayController?
     private var hotKeys = HotKeys()
     private var pendingHotKeys: DispatchWorkItem?
-    private let systemDock = SystemDock()
+    private static let dockRestoreScript = DataStore.defaultDirectory.appendingPathComponent("dock-restore.sh")
+    private let systemDock = SystemDock(restoreScript: AppDelegate.dockRestoreScript)
+    private let dockWatchdog = DockWatchdog(
+        agents: FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/LaunchAgents"),
+        restoreScript: AppDelegate.dockRestoreScript)
+    private var signalTrap: SignalTrap?
     private var cancellables: Set<AnyCancellable> = []
 
     override init() {
@@ -151,6 +156,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         let model = AppModel.shared
         model.start()
+        // `kill`, Ctrl-C or a closed terminal would otherwise end Kairos with the Dock still hidden.
+        signalTrap = SignalTrap { [weak self] _ in self?.endOnSignal() }
         if BridgeInstaller.installedBrowsers().isEmpty { BridgeInstaller.install() }
 
         dock = DockPanelController(model: model)
@@ -176,6 +183,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .sink { [weak self] hide in
                 guard let self, !DataStore.isScratch else { return }
                 if hide { self.systemDock.replace() } else { self.systemDock.restore() }
+            }
+            .store(in: &cancellables)
+        // The watchdog brings the Dock back after a crash or force quit. It exists while the switch is on.
+        model.$data.map(\.settings.replacesSystemDock).removeDuplicates()
+            .sink { [weak self] on in
+                guard let self, !DataStore.isScratch else { return }
+                if on { self.dockWatchdog.install() } else { self.dockWatchdog.remove() }
             }
             .store(in: &cancellables)
         if ProcessInfo.processInfo.environment["KAIROS_START_FOCUS"] == "1" { model.startFocus() } // scripts/bridge-check.py
@@ -220,6 +234,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         if !DataStore.isScratch { systemDock.restore() }
         AppModel.shared.shutdown()
+    }
+
+    /// A termination signal cannot be refused, in Strict either: like a force quit, a strict
+    /// phase resumes at the next launch.
+    private func endOnSignal() {
+        if !DataStore.isScratch { systemDock.restore() }
+        AppModel.shared.shutdown()
+        exit(0)
     }
 
     // Closing the main window leaves the dock and menu bar item running.

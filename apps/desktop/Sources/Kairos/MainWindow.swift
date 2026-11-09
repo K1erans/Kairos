@@ -751,8 +751,10 @@ struct SettingsPage: View {
                 Text("You can also drag the divider on the bar itself.").font(.callout).foregroundStyle(.secondary)
                 Toggle("Automatically hide and show Kairos Bar", isOn: $model.data.settings.autoHideBar)
                 VStack(alignment: .leading, spacing: 4) {
-                    Toggle("Use Kairos Bar instead of the macOS Dock", isOn: $model.data.settings.replacesSystemDock)
-                    Text("macOS can\u{2019}t remove the Dock, so Kairos hides it instead; turning this off restores your previous Dock settings.")
+                    Toggle("Use Kairos Bar instead of the macOS Dock", isOn: Binding(
+                        get: { model.data.settings.replacesSystemDock },
+                        set: { model.data.settings.setReplacesSystemDock($0) }))
+                    Text("macOS can\u{2019}t remove the Dock, so Kairos hides it and puts your Dock settings back when you turn this off or quit. Turning this on also turns on \u{201C}Automatically hide and show Kairos Bar\u{201D}, so the bar slides away like the Dock did. If Kairos ever stops without putting the Dock back, a small background helper does it within 15 seconds.")
                         .font(.callout).foregroundStyle(.secondary)
                 }
             }

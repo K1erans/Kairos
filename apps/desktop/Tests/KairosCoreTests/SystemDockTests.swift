@@ -9,8 +9,8 @@ final class FakeDock: CommandRunner {
 
     func run(_ tool: String, _ arguments: [String]) -> (status: Int32, output: String) {
         log.append([tool] + arguments)
-        if tool == "/usr/bin/killall" { restarts += 1; return (0, "") }
-        XCTAssertEqual(tool, "/usr/bin/defaults")
+        if tool.hasSuffix("/killall") { restarts += 1; return (0, "") }
+        XCTAssertTrue(tool.hasSuffix("/defaults"), tool)
         XCTAssertEqual(arguments[1], SystemDock.domain, "only the Dock's domain is touched")
         let key = arguments[2]
         switch arguments[0] {
