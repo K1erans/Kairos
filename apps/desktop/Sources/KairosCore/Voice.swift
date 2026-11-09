@@ -36,7 +36,8 @@ public final class VoiceClient: @unchecked Sendable {
         case .system:
             return nil
         case .elevenlabs:
-            let voice = voiceId.isEmpty ? elevenLabsDefaultVoice : voiceId
+            // An OpenAI name saved before the provider changed is not an ElevenLabs voice.
+            let voice = voiceId.isEmpty || openAIVoices.contains(voiceId) ? elevenLabsDefaultVoice : voiceId
             guard let safe = voice.addingPercentEncoding(withAllowedCharacters: .alphanumerics),
                   let url = URL(string: "https://api.elevenlabs.io/v1/text-to-speech/\(safe)?output_format=mp3_44100_128") else { return nil }
             req = URLRequest(url: url)
@@ -45,7 +46,7 @@ public final class VoiceClient: @unchecked Sendable {
         case .openai:
             req = URLRequest(url: URL(string: "https://api.openai.com/v1/audio/speech")!)
             req.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
-            body = ["model": "gpt-4o-mini-tts", "voice": voiceId.isEmpty ? "alloy" : voiceId, "input": text, "response_format": "mp3"]
+            body = ["model": "gpt-4o-mini-tts", "voice": openAIVoices.contains(voiceId) ? voiceId : "alloy", "input": text, "response_format": "mp3"]
         }
         req.httpMethod = "POST"
         req.timeoutInterval = 30

@@ -235,6 +235,15 @@ public struct Settings: Codable, Hashable, Sendable {
     ]
 }
 
+extension Settings {
+    /// A voice id belongs to one provider, so choosing another provider starts from its default voice.
+    public mutating func setVoiceProvider(_ provider: VoiceProvider) {
+        guard provider != voiceProvider else { return }
+        voiceProvider = provider
+        voiceId = ""
+    }
+}
+
 extension Settings: Lenient {
     public static var fallback: Settings { Settings() }
     public static let fields: [LenientField<Settings>] = [

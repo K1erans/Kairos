@@ -795,7 +795,8 @@ struct SettingsPage: View {
                 keyRow("Anthropic (3D scenes)", has: model.hasClaudeKey, text: $claudeKey, account: "anthropic")
             }
             Section("Reading voice (Kairos Read)") {
-                Picker("Voice", selection: $model.data.settings.voiceProvider) {
+                Picker("Voice", selection: Binding(get: { model.data.settings.voiceProvider },
+                                                   set: { model.data.settings.setVoiceProvider($0) })) {
                     ForEach(VoiceProvider.allCases, id: \.self) { Text($0.label).tag($0) }
                 }
                 if model.data.settings.voiceProvider == .elevenlabs {
