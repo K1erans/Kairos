@@ -119,6 +119,26 @@ struct TaskRow: View {
     }
 }
 
+/// Something that is not working the way the owner probably thinks it is.
+struct WarningBanner<Action: View>: View {
+    let systemImage: String
+    let text: String
+    @ViewBuilder var action: () -> Action
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Image(systemName: systemImage).foregroundStyle(.orange)
+            Text(text).fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 8)
+            action()
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.orange.opacity(0.14), in: RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color.orange.opacity(0.35)))
+    }
+}
+
 struct QuickAddField: View {
     @EnvironmentObject var model: AppModel
     @State private var text = ""
@@ -282,8 +302,13 @@ struct TodayPage: View {
                     }
                     .frame(width: 200)
                 }
+                if model.siteBlockingOff {
+                    WarningBanner(systemImage: "exclamationmark.shield.fill", text: AppModel.siteBlockingOffText) {
+                        Button("Chrome bridge settings") { model.page = .settings }
+                    }
+                }
                 if model.mode.blocks, let problem = model.jevReadiness(for: model.activeGroup).problem {
-                    Label(problem, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                    WarningBanner(systemImage: "exclamationmark.triangle.fill", text: problem) { EmptyView() }
                 }
                 HStack {
                     Text("Group").font(.headline)
@@ -747,6 +772,11 @@ struct SettingsPage: View {
                 Stepper("Overrides per session: \(model.data.settings.maxOverridesPerSession)", value: $model.data.settings.maxOverridesPerSession, in: 0...10)
                 Stepper("Each override lasts \(model.data.settings.overrideMinutes) min", value: $model.data.settings.overrideMinutes, in: 1...30)
                 Toggle("Block the page when Jev is slow or offline", isOn: $model.data.settings.jevFailClosed)
+                VStack(alignment: .leading, spacing: 4) {
+                    Toggle("Block browsers that Kairos Shield is not running in", isOn: $model.data.settings.blockUnshieldedBrowsers)
+                    Text("In Focus and Strict, Safari, Firefox and other browsers that can\u{2019}t run Kairos Shield are hidden, and so are Chromium browsers (Chrome, Brave, Arc, Edge) while no Kairos Shield is connected. Kairos can\u{2019}t tell which Chromium browser Shield is running in, so one connected Shield counts for all of them.")
+                        .font(.callout).foregroundStyle(.secondary)
+                }
                 LabeledContent("Read window titles (Accessibility)") {
                     if axTrusted { Label("Allowed", systemImage: "checkmark.circle.fill").foregroundStyle(.green) }
                     else {

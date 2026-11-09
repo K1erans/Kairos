@@ -40,15 +40,15 @@ public final class DataStore {
 
     /// Returns starter data when no file exists. A file that fails to decode is kept
     /// beside the store as `kairos.corrupt-<time>.json` rather than overwritten.
-    public func load() -> AppData {
-        guard let raw = try? Data(contentsOf: url) else { return .starter() }
+    public func load(starter: () -> AppData = { .starter() }) -> AppData {
+        guard let raw = try? Data(contentsOf: url) else { return starter() }
         do {
             return try Self.decoder.decode(AppData.self, from: raw)
         } catch {
             let stamp = Int(Date().timeIntervalSince1970)
             let backup = url.deletingLastPathComponent().appendingPathComponent("kairos.corrupt-\(stamp).json")
             try? raw.write(to: backup)
-            return .starter()
+            return starter()
         }
     }
 

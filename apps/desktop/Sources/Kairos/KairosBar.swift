@@ -360,6 +360,9 @@ struct DockView: View {
                     .contextMenu { groupMenu(model.data.groups[index]) }
                     .accessibilityLabel("Switch to \(model.data.groups[index].name)")
                     .accessibilityAddTraits(.isButton)
+                    .overlay(alignment: .topTrailing) {
+                        if id == model.data.focus.activeGroupId, model.siteBlockingOff { warningBadge(size: item.size) }
+                    }
                     .position(at)
                 if id == model.data.focus.activeGroupId { dot(item, f) }
             }
@@ -434,6 +437,18 @@ struct DockView: View {
                     .foregroundStyle(active ? .white : color)
             }
             .padding(size * 0.07)
+    }
+
+    /// On the active group while blocking is on but no Kairos Shield is connected.
+    private func warningBadge(size: Double) -> some View {
+        Image(systemName: "exclamationmark")
+            .font(.system(size: max(7, size * 0.2), weight: .heavy))
+            .foregroundStyle(.white)
+            .frame(width: max(11, size * 0.32), height: max(11, size * 0.32))
+            .background(Color.orange, in: Circle())
+            .overlay(Circle().strokeBorder(Color.black.opacity(0.25)))
+            .accessibilityLabel("Site blocking is off")
+            .allowsHitTesting(false)
     }
 
     private func placeholder(_ symbol: String, size: Double) -> some View {
@@ -537,6 +552,7 @@ struct DockView: View {
         case let .group(id):
             let index = model.data.groups.firstIndex { $0.id == id } ?? 0
             let shortcut = model.data.settings.groupHotkeys && index < 9 ? "⌃\(index + 1)" : nil
+            if id == model.data.focus.activeGroupId, model.siteBlockingOff { return (model.data.group(id)?.name ?? "", "Site blocking off") }
             return (model.data.group(id)?.name ?? "", shortcut)
         case .newGroup: return ("New Group…", nil)
         case .divider, .separator: return ("", nil)

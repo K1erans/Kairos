@@ -9,8 +9,9 @@ final class AppGuardTests: XCTestCase {
         return g
     }
 
-    private func sweep(_ apps: [AppGuard.App], mode: Mode = .focus, allowed: Set<String> = []) -> [String] {
-        AppGuard.sweep(apps, mode: mode, group: group, isAllowed: { allowed.contains($0) }, own: "com.kairos.desktop")
+    private func sweep(_ apps: [AppGuard.App], mode: Mode = .focus, allowed: Set<String> = [], group: AppGroup? = nil) -> [String] {
+        AppGuard.Context(mode: mode, group: group ?? self.group, own: "com.kairos.desktop", shieldConnected: true,
+                         blocksUnshieldedBrowsers: true, isAllowed: { allowed.contains($0) }).sweep(apps).map(\.bundleId)
     }
 
     func testASweepHidesBlockedAppsThatAreAlreadyOnScreen() {
@@ -32,7 +33,7 @@ final class AppGuardTests: XCTestCase {
         var g = group
         g.blockedApps += ["com.apple.finder", "com.kairos.desktop"]
         let apps = ["com.apple.finder", "com.kairos.desktop"].map { AppGuard.App(bundleId: $0, visible: true) }
-        XCTAssertEqual(AppGuard.sweep(apps, mode: .focus, group: g, isAllowed: { _ in false }, own: "com.kairos.desktop"), [])
+        XCTAssertEqual(sweep(apps, group: g), [])
     }
 
     func testTheNextGrantToRunOutIsTheEarliestUnexpiredOne() {
@@ -44,5 +45,52 @@ final class AppGuardTests: XCTestCase {
         XCTAssertEqual(ledger.nextExpiry(after: now), now.addingTimeInterval(300))
         XCTAssertEqual(ledger.nextExpiry(after: now.addingTimeInterval(301)), now.addingTimeInterval(360))
         XCTAssertNil(ledger.nextExpiry(after: now.addingTimeInterval(400)))
+    }
+}
+
+/// Site rules only exist inside a browser running Kairos Shield, so in a blocking mode a browser
+/// Shield is not in is handled like a blocked app.
+final class UnshieldedBrowserTests: XCTestCase {
+    private func reason(_ bid: String, shield: Bool, setting: Bool = true, mode: Mode = .focus, allowed: Bool = false,
+                        group: AppGroup = AppGroup(name: "Work")) -> AppGuard.Reason? {
+        AppGuard.Context(mode: mode, group: group, own: "com.kairos.desktop", shieldConnected: shield,
+                         blocksUnshieldedBrowsers: setting, isAllowed: { _ in allowed }).reason(bid)
+    }
+
+    func testBrowsersShieldCannotRunInAreBlockedWhileBlocking() {
+        for bid in ["com.apple.Safari", "org.mozilla.firefox"] {
+            XCTAssertEqual(reason(bid, shield: true), .browserWithoutShield, bid)
+            XCTAssertEqual(reason(bid, shield: false), .browserWithoutShield, bid)
+        }
+    }
+
+    func testAChromiumBrowserIsBlockedOnlyWhileNoShieldIsConnected() {
+        for bid in ["com.google.Chrome", "com.brave.Browser", "company.thebrowser.Browser"] {
+            XCTAssertEqual(reason(bid, shield: false), .browserWithoutShield, bid)
+            XCTAssertNil(reason(bid, shield: true), "any connected Shield is taken to cover every Chromium browser")
+        }
+    }
+
+    func testTheSettingModeAndAnAllowTurnItOff() {
+        XCTAssertNil(reason("com.apple.Safari", shield: false, setting: false))
+        XCTAssertNil(reason("com.apple.Safari", shield: false, mode: .off))
+        XCTAssertNil(reason("com.apple.Safari", shield: false, mode: .onBreak))
+        XCTAssertNil(reason("com.apple.Safari", shield: false, allowed: true))
+        XCTAssertNil(reason("com.apple.Notes", shield: false), "not a browser")
+    }
+
+    func testAListedBlockSaysSoFirst() {
+        var g = AppGroup(name: "Work")
+        g.blockedApps = ["com.apple.Safari"]
+        XCTAssertEqual(reason("com.apple.Safari", shield: false, group: g), .listed)
+    }
+
+    func testTheStarterPinsAnInstalledChromiumBrowserInsteadOfSafari() {
+        let brave = AppData.starter(browser: Browsers.preferredChromium(installed: { $0 == "com.brave.Browser" }))
+        XCTAssertFalse(brave.groups.contains { $0.dockApps.contains("com.apple.Safari") })
+        XCTAssertEqual(brave.groups[0].dockApps[1], "com.brave.Browser", "in Safari's place")
+        XCTAssertTrue(brave.groups[1].dockApps.contains("com.brave.Browser"))
+        let none = AppData.starter(browser: Browsers.preferredChromium(installed: { _ in false }))
+        XCTAssertTrue(none.groups[0].dockApps.contains("com.apple.Safari"), "no Chromium browser: Safari stays")
     }
 }

@@ -68,7 +68,7 @@ final class AppModel: ObservableObject {
     /// `readKeys: false` skips the Keychain, so the snapshot tool never triggers an access prompt.
     init(store: DataStore = .standard(), readKeys: Bool = true) {
         self.store = store
-        var loaded = store.load()
+        var loaded = store.load(starter: { .starter(browser: Browsers.preferredChromium { Apps.url($0) != nil }) })
         let resume = loaded.recoverAfterLaunch()
         data = loaded
         var engine = TempoEngine(preset: loaded.preset(named: loaded.activeGroup?.tempoPreset ?? "Classic"))
@@ -191,6 +191,11 @@ final class AppModel: ObservableObject {
     var remaining: TimeInterval { tempo.remaining(now: now) }
     var progress: Double { tempo.progress(now: now) }
     var overridesLeft: Int { ledger.remaining(max: data.settings.maxOverridesPerSession) }
+
+    /// Blocking is on but no Kairos Shield is connected, so no site rule is enforced anywhere.
+    var siteBlockingOff: Bool { mode.blocks && !shieldConnected }
+    var shieldConnected: Bool { bridgeClients.contains("shield") }
+    static let siteBlockingOffText = "Site blocking is off: Kairos Shield isn\u{2019}t connected, so your blocked sites open normally. Open Chrome (or another Chromium browser) with Kairos Shield loaded."
 
     func jevReadiness(for group: AppGroup?) -> JevReadiness {
         JevReadiness(enabled: group?.jevEnabled ?? false, hasKey: hasJevKey, hasTask: currentTask != nil, lastError: lastJevError)
@@ -460,8 +465,8 @@ final class AppModel: ObservableObject {
         guard guardsApps, mode.blocks, let group = activeGroup, let bid = app.bundleIdentifier else { return }
         let now = Date()
         let name = app.localizedName ?? bid
-        if AppGuard.blocks(bid, mode: mode, group: group, isAllowed: { self.ledger.isAllowed($0, now: now) }, own: Bundle.main.bundleIdentifier) {
-            block(app, name: name, layer: "app", detail: "\(name) is blocked in \(group.name).")
+        if let reason = guardContext(now: now).reason(bid) {
+            block(app, name: name, reason: reason, group: group)
             return
         }
         // Jev judges apps that are on no list. Apps in the group's dock are trusted.
@@ -499,18 +504,49 @@ final class AppModel: ObservableObject {
 
     private func sweep() {
         guard guardsApps, mode.blocks, let group = activeGroup else { return }
-        let now = Date()
         let apps = NSWorkspace.shared.runningApplications.filter { $0.activationPolicy == .regular }
-        let hide = AppGuard.sweep(apps.compactMap { a in a.bundleIdentifier.map { AppGuard.App(bundleId: $0, visible: !a.isHidden) } },
-                                  mode: mode, group: group, isAllowed: { self.ledger.isAllowed($0, now: now) }, own: Bundle.main.bundleIdentifier)
-        let front = NSWorkspace.shared.frontmostApplication
+        let hide = guardContext(now: Date()).sweep(apps.compactMap { a in a.bundleIdentifier.map { AppGuard.App(bundleId: $0, visible: !a.isHidden) } })
+        let front = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
         // The frontmost app goes last, so the overlay names the app the owner was looking at.
-        for bid in hide.filter({ $0 != front?.bundleIdentifier }) + hide.filter({ $0 == front?.bundleIdentifier }) {
-            guard let app = apps.first(where: { $0.bundleIdentifier == bid }) else { continue }
-            let name = app.localizedName ?? bid
-            block(app, name: name, layer: "app", detail: "\(name) is blocked in \(group.name).")
+        for item in hide.filter({ $0.bundleId != front }) + hide.filter({ $0.bundleId == front }) {
+            guard let app = apps.first(where: { $0.bundleIdentifier == item.bundleId }) else { continue }
+            block(app, name: app.localizedName ?? item.bundleId, reason: item.reason, group: group)
         }
-        if let front, let bid = front.bundleIdentifier, !hide.contains(bid) { appActivated(front) }
+        if let app = NSWorkspace.shared.frontmostApplication, let bid = front, !hide.contains(where: { $0.bundleId == bid }) {
+            appActivated(app)
+        }
+    }
+
+    private func guardContext(now: Date) -> AppGuard.Context {
+        AppGuard.Context(mode: mode, group: activeGroup, own: Bundle.main.bundleIdentifier, shieldConnected: shieldConnected,
+                         blocksUnshieldedBrowsers: data.settings.blockUnshieldedBrowsers,
+                         isAllowed: { [ledger] in ledger.isAllowed($0, now: now) })
+    }
+
+    private func block(_ app: NSRunningApplication, name: String, reason: AppGuard.Reason, group: AppGroup) {
+        switch reason {
+        case .listed:
+            block(app, name: name, layer: "app", detail: "\(name) is blocked in \(group.name).")
+        case .browserWithoutShield:
+            guard let bid = app.bundleIdentifier else { return }
+            if Browsers.isChromium(bid), !app.isTerminated {
+                // Ask again once Shield has had time to connect from a browser that just opened.
+                DispatchQueue.main.asyncAfter(deadline: .now() + AppGuard.shieldGrace) { [weak self] in
+                    guard let self, !app.isTerminated, !app.isHidden,
+                          self.guardContext(now: Date()).reason(bid) == .browserWithoutShield else { return }
+                    self.blockUnshielded(app, name: name)
+                }
+                return
+            }
+            blockUnshielded(app, name: name)
+        }
+    }
+
+    private func blockUnshielded(_ app: NSRunningApplication, name: String) {
+        let why = Browsers.isChromium(app.bundleIdentifier ?? "")
+            ? "Kairos Shield isn\u{2019}t connected, so your blocked sites would open in \(name)."
+            : "Kairos Shield can\u{2019}t run in \(name), so your blocked sites would open there."
+        block(app, name: name, layer: "app", detail: why + " Use a Chromium browser with Kairos Shield, or turn this off in Settings > Blocking.")
     }
 
     /// Hides, in Strict too: quitting would lose the owner's unsaved work in that app.

@@ -92,6 +92,7 @@ enum Snapshot {
         model.page = .today
         model.setMode(.focus)
         shot("main-today-focus", size: CGSize(width: 1000, height: 660), MainWindow())
+        dock("left-36-focus-no-shield", pointer: .group(work.id))
         model.setMode(.off)
         let added = model.addGroup()
         model.page = .groups

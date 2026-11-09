@@ -223,6 +223,8 @@ public struct Settings: Codable, Hashable, Sendable {
     public var autoHideBar: Bool = false
     /// Keep the macOS Dock hidden while Kairos Bar is on screen.
     public var replacesSystemDock: Bool = false
+    /// In Focus and Strict, hide a browser that Kairos Shield is not running in.
+    public var blockUnshieldedBrowsers: Bool = true
 
     public init() {}
 
@@ -242,6 +244,7 @@ extension Settings: Lenient {
         .field("overrideMinutes", \.overrideMinutes), .field("breakOverlay", \.breakOverlay),
         .field("groupHotkeys", \.groupHotkeys), .field("voiceProvider", \.voiceProvider), .field("voiceId", \.voiceId),
         .field("autoHideBar", \.autoHideBar), .field("replacesSystemDock", \.replacesSystemDock),
+        .field("blockUnshieldedBrowsers", \.blockUnshieldedBrowsers),
     ]
 }
 
@@ -280,7 +283,9 @@ public struct AppData: Codable, Sendable {
 
     public init() {}
 
-    public static func starter() -> AppData {
+    /// `browser` takes Safari's place in the groups' apps: site rules only reach a browser that
+    /// can run Kairos Shield.
+    public static func starter(browser: String? = nil) -> AppData {
         var d = AppData()
         var work = AppGroup(name: "Work", icon: "briefcase.fill", colorHex: "#4F7CFF")
         work.dockApps = ["com.apple.mail", "com.apple.Safari", "com.apple.Notes", "com.apple.iCal"]
@@ -293,6 +298,10 @@ public struct AppData: Codable, Sendable {
         var personal = AppGroup(name: "Personal", icon: "house.fill", colorHex: "#E0703A")
         personal.dockApps = ["com.apple.MobileSMS", "com.apple.Photos", "com.apple.Music"]
         personal.jevEnabled = false
+        if let browser {
+            work.dockApps = work.dockApps.map { $0 == "com.apple.Safari" ? browser : $0 }
+            study.dockApps = study.dockApps.map { $0 == "com.apple.Safari" ? browser : $0 }
+        }
         d.groups = [work, study, personal]
         d.focus.activeGroupId = work.id
         return d

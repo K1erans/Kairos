@@ -74,6 +74,10 @@ struct MenuBarMenu: View {
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
+        if model.siteBlockingOff {
+            Label("Site blocking is off: Kairos Shield isn\u{2019}t connected", systemImage: "exclamationmark.triangle")
+            Divider()
+        }
         if let task = model.currentTask {
             Text(task.title)
             Button("Mark done") { model.setDone(task, true) }
