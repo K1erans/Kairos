@@ -153,8 +153,9 @@ Quit ==
     /\ act' = "Quit"
     /\ UNCHANGED <<phase, paused, holds, preset, pending, groupStrict, mode, used, grant, escaped>>
 
-\* Force quit, a crash, or logging out and shutting down (which applicationShouldTerminate lets
-\* through): nothing in Kairos can refuse these.
+\* Force quit, a crash, a termination signal (kill, Ctrl-C: AppDelegate.endOnSignal saves and exits),
+\* or logging out and shutting down (which applicationShouldTerminate lets through): nothing in
+\* Kairos can refuse these.
 ForceQuit ==
     /\ up
     /\ up' = FALSE

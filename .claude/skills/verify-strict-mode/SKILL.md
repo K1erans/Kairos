@@ -67,7 +67,7 @@ Covered: `OverrideLedger` in `apps/desktop/Sources/KairosCore/Rules.swift`; `Tem
 
 `requestStartFocus` and `requestSkip` ask before a strict focus phase starts. Agreeing is the model's `StartFocus` or `Skip`; cancelling changes nothing, so it is no step.
 
-Last confirmed in sync: 2026-11-09, recorded as file checksums in `verification/strict-mode/synced.sha256`, in the commit "Keep strict focus through a quit and hide blocked apps instead of quitting them" (its parent is 42f8a77). Write the commit hash here each time you run `--confirm`.
+Last confirmed in sync: 2026-11-09, recorded as file checksums in `verification/strict-mode/synced.sha256`, in the commit "Count a termination signal as a force quit in the strict-mode model" (its parent is 6a57093). Write the commit hash here each time you run `--confirm`.
 
 ## What this does not cover
 
