@@ -15,6 +15,12 @@ public final class DataStore {
         return base.appendingPathComponent("Kairos", isDirectory: true)
     }
 
+    /// A scratch copy (`KAIROS_HOME` set, as the checks and snapshot tool do) must leave the rest
+    /// of the Mac alone: the browsers' native messaging manifests, the login item, the Dock.
+    public static var isScratch: Bool {
+        !(ProcessInfo.processInfo.environment["KAIROS_HOME"] ?? "").isEmpty
+    }
+
     public static func standard() -> DataStore {
         DataStore(url: defaultDirectory.appendingPathComponent("kairos.json"))
     }

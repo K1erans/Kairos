@@ -143,7 +143,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Hiding Kairos Bar, by any route, brings the macOS Dock back until the bar returns.
         model.$data.map(\.settings.hidesSystemDock).removeDuplicates()
             .sink { [weak self] hide in
-                guard let self else { return }
+                guard let self, !DataStore.isScratch else { return }
                 if hide { self.systemDock.replace() } else { self.systemDock.restore() }
             }
             .store(in: &cancellables)
@@ -167,7 +167,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// The macOS Dock comes back whenever Kairos is not running to stand in for it.
     func applicationWillTerminate(_ notification: Notification) {
-        systemDock.restore()
+        if !DataStore.isScratch { systemDock.restore() }
         AppModel.shared.shutdown()
     }
 

@@ -149,6 +149,7 @@ enum BridgeInstaller {
     /// folder. Returns the browsers it was installed for.
     @discardableResult
     static func install() -> [String] {
+        guard !DataStore.isScratch else { return [] }
         let fm = FileManager.default
         let support = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         guard fm.isExecutableFile(atPath: hostPath),
@@ -183,6 +184,7 @@ enum BridgeInstaller {
 enum LoginItem {
     static var enabled: Bool { SMAppService.mainApp.status == .enabled }
     static func set(_ on: Bool) {
+        guard !DataStore.isScratch else { return }
         do { if on { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() } } catch {
             NSLog("Kairos: login item change failed: \(error.localizedDescription)")
         }
