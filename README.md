@@ -68,6 +68,8 @@ Claude.
 - **Notifications**: for the end of a focus session or break. When a break ends the timer waits
   for you to start the next focus session, unless Settings > Timer > "Start the next focus session
   automatically" is on.
+  Kairos also notifies you when a task is due (Settings > General). macOS keeps at most 64 waiting
+  notifications per app, so Kairos schedules the soonest 64 and adds later ones as those pass.
 - **Open at login**: Settings > General.
 - **Use Kairos Bar instead of the macOS Dock** (Settings > Kairos Bar) hides the Dock with its own
   auto-hide settings and puts them back when turned off or when Kairos quits. While it is on, a
@@ -101,6 +103,10 @@ directory and checks `apps/desktop/build/Kairos.app` unless given another path.
 
 Kairos keeps its data in `~/Library/Application Support/Kairos/kairos.json`. Set `KAIROS_HOME` to
 another folder to run a separate copy with its own data and socket.
+Settings > Data exports it all as JSON. Import replaces it with an exported file after saving a
+copy of the current one beside it as `kairos-backup-<date>-<time>.json`; it waits while a timer
+runs. Session and block history older than 400 days is dropped, and so is anything past 20,000
+sessions or 5,000 block events.
 
 ## Verification
 

@@ -228,6 +228,8 @@ public struct Settings: Codable, Hashable, Sendable {
     public var autoHideBar: Bool = false
     /// Keep the macOS Dock hidden while Kairos Bar is on screen.
     public var replacesSystemDock: Bool = false
+    /// A notification when a task's due time comes.
+    public var notifiesWhenDue: Bool = true
     /// Downloads and Trash at the end of Kairos Bar.
     public var showsDockFolders: Bool = true
     /// After a break runs out, start the next focus phase at once instead of waiting.
@@ -263,6 +265,7 @@ extension Settings: Lenient {
         .field("groupHotkeys", \.groupHotkeys), .field("quickAddHotkey", \.quickAddHotkey), .field("timerHotkey", \.timerHotkey), .field("voiceProvider", \.voiceProvider), .field("voiceId", \.voiceId),
         .field("autoHideBar", \.autoHideBar), .field("replacesSystemDock", \.replacesSystemDock),
         .field("blockUnshieldedBrowsers", \.blockUnshieldedBrowsers), .field("startsFocusAfterBreak", \.startsFocusAfterBreak), .field("showsDockFolders", \.showsDockFolders),
+        .field("notifiesWhenDue", \.notifiesWhenDue),
     ]
 }
 

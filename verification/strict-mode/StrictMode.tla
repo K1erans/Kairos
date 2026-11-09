@@ -126,7 +126,8 @@ Stop == phase # "idle" /\ (LocksStrictControls => ~InStrictPhase) /\ Halt("Stop"
 TimeUp     == phase # "idle" /\ ~paused /\ (Advance("TimeUp", FALSE) \/ (phase = "rest" /\ Halt("BreakOver", FALSE)))
 LongSleep  == phase # "idle" /\ ~paused /\ Halt("LongSleep", FALSE)
 
-\* AppModel.switchGroup -> TempoEngine.use
+\* AppModel.switchGroup -> TempoEngine.use. Import (AppModel.importData) can change the active
+\* group too, but only while the timer is idle and without touching the mode, which is this step.
 SwitchGroup(s) ==
     /\ groupStrict' = s
     /\ IF phase = "idle" THEN preset' = s /\ pending' = "none"

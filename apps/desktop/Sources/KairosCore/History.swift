@@ -17,6 +17,8 @@ extension AppData {
     /// How much history is kept.
     public static let sessionDays = 400
     public static let maxBlockEvents = 5000
+    /// Far more than a year of focus and break phases, so it bounds only a runaway.
+    public static let maxSessions = 20_000
 
     /// Logs a finished timer phase against the current task and group.
     public mutating func log(_ event: TempoEvent, now: Date = Date()) {
@@ -30,9 +32,13 @@ extension AppData {
         trimHistory(now: now)
     }
 
+    /// Keeps the saved file from growing without end: sessions and block events older than
+    /// `sessionDays` go, then the oldest past each count limit.
     public mutating func trimHistory(now: Date) {
         let cutoff = now.addingTimeInterval(-Double(Self.sessionDays) * 86400)
-        if let first = sessions.first, first.end < cutoff { sessions.removeAll { $0.end < cutoff } }
+        if sessions.contains(where: { $0.end < cutoff }) { sessions.removeAll { $0.end < cutoff } }
+        if sessions.count > Self.maxSessions { sessions.removeFirst(sessions.count - Self.maxSessions) }
+        if blockEvents.contains(where: { $0.time < cutoff }) { blockEvents.removeAll { $0.time < cutoff } }
         if blockEvents.count > Self.maxBlockEvents { blockEvents.removeFirst(blockEvents.count - Self.maxBlockEvents) }
     }
 
@@ -42,6 +48,7 @@ extension AppData {
     /// running is logged as cut short at the last save.
     @discardableResult
     public mutating func recoverAfterLaunch(now: Date = Date()) -> StrictResume? {
+        trimHistory(now: now)
         if let until = focus.strictUntil, until > now {
             let start = openSession.flatMap { $0.kind == .focus ? $0.start : nil } ?? now
             openSession = nil

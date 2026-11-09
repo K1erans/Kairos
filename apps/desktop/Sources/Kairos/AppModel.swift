@@ -62,6 +62,7 @@ final class AppModel: ObservableObject {
     private var lastPushed = Data()
     private var hiddenBySwitch: [UUID: [String]] = [:]
     private var observers: [NSObjectProtocol] = []
+    private var reminders: AnyCancellable?
     private var grantTimer: Timer?
     /// The app guard hides apps only in the running app, never in the snapshot tool or a
     /// scratch copy (bridge-check), which would otherwise hide the owner's real apps.
@@ -115,6 +116,35 @@ final class AppModel: ObservableObject {
         saveNow() // keeps what launch recovery logged
         if mode.blocks { sweepSoon() } // a strict phase resumed after a quit
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
+        // A scratch copy (bridge-check) must not put its tasks in the owner's Notification Center.
+        guard !DataStore.isScratch else { return }
+        reminders = $data.map(DueReminders.Inputs.init).removeDuplicates()
+            .debounce(for: .seconds(1), scheduler: RunLoop.main)
+            .sink { [weak self] _ in self?.scheduleDueReminders() }
+        observers.append(NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in self?.scheduleDueReminders() }
+        })
+    }
+
+    /// Replaces Kairos's pending due reminders with the current plan: the soonest 64, which is
+    /// all macOS keeps. Runs when tasks change and when Kairos comes forward, so later tasks
+    /// get theirs as earlier ones fire.
+    private func scheduleDueReminders() {
+        let plan = DueReminders.plan(DueReminders.Inputs(data), now: Date())
+        UNUserNotificationCenter.current().getPendingNotificationRequests { pending in
+            let center = UNUserNotificationCenter.current()
+            let stale = pending.map(\.identifier).filter { $0.hasPrefix(DueReminder.idPrefix) }
+            center.removePendingNotificationRequests(withIdentifiers: stale)
+            for reminder in plan {
+                let content = UNMutableNotificationContent()
+                content.title = reminder.title
+                content.body = reminder.body
+                content.sound = .default
+                let when = Calendar.current.dateComponents([.year, .month, .day, .hour, .minute, .second], from: reminder.fireAt)
+                center.add(UNNotificationRequest(identifier: reminder.id, content: content,
+                                                 trigger: UNCalendarNotificationTrigger(dateMatching: when, repeats: false)))
+            }
+        }
     }
 
     func shutdown() {
@@ -151,6 +181,20 @@ final class AppModel: ObservableObject {
     }
 
     func exportJSON() -> Data? { try? DataStore.encoder.encode(data) }
+
+    /// Import is refused while a timer runs, so it can never end or change a focus phase.
+    var canImport: Bool { tempo.phase == .idle }
+
+    /// Replaces everything with an exported file, after saving and backing up the current file.
+    /// Returns the backup, nil when there was no file to back up yet.
+    func importData(_ file: AppData) throws -> URL? {
+        guard canImport else { throw ImportProblem.timerRunning }
+        saveNow()
+        let backup = try store.backup(now: Date())
+        data = data.importing(file, now: Date())
+        tempo.use(data.preset(named: activeGroup?.tempoPreset ?? "Classic"))
+        return backup
+    }
 
     // MARK: Keys
 

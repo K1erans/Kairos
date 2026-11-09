@@ -879,6 +879,7 @@ struct SettingsPage: View {
         Form {
             Section("General") {
                 Toggle("Open Kairos at login", isOn: Binding(get: { loginItem }, set: { LoginItem.set($0); loginItem = LoginItem.enabled }))
+                Toggle("Notify me when a task is due", isOn: $model.data.settings.notifiesWhenDue)
                 Picker("When switching group", selection: $model.data.settings.switchBehavior) {
                     ForEach(SwitchBehavior.allCases, id: \.self) { Text($0.label).tag($0) }
                 }
@@ -999,7 +1000,14 @@ struct SettingsPage: View {
                     .font(.callout).foregroundStyle(.secondary)
             }
             Section("Data") {
-                Button("Export everything as JSON…") { export() }
+                HStack {
+                    Button("Export everything as JSON…") { export() }
+                    Button("Import…") { importFile() }
+                        .disabled(!model.canImport)
+                        .help(model.canImport ? "Replace everything with an exported file" : "Stop the timer to import.")
+                }
+                Text("Import replaces your groups, tasks, rules, history and settings with an exported file. Kairos saves a copy of what you have now first, beside its data file.")
+                    .font(.callout).foregroundStyle(.secondary)
             }
         }
         .formStyle(.grouped)
@@ -1016,6 +1024,42 @@ struct SettingsPage: View {
                 .disabled(text.wrappedValue.isEmpty)
             if has { Button("Remove") { model.setKey("", account: account) } }
         }
+    }
+
+    private func importFile() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.json]
+        panel.allowsMultipleSelection = false
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        guard let raw = try? Data(contentsOf: url), let file = try? AppData.fromExport(raw) else {
+            let alert = NSAlert()
+            alert.messageText = "\u{201C}\(url.lastPathComponent)\u{201D} is not a Kairos export"
+            alert.informativeText = "Choose a file made with \u{201C}Export everything as JSON\u{201D}. Nothing was changed."
+            alert.runModal()
+            return
+        }
+        let confirm = NSAlert()
+        confirm.alertStyle = .warning
+        confirm.messageText = "Replace everything in Kairos with this file?"
+        confirm.informativeText = "\(file.groups.count) group\(file.groups.count == 1 ? "" : "s") and \(file.tasks.count) task\(file.tasks.count == 1 ? "" : "s") from \u{201C}\(url.lastPathComponent)\u{201D} take the place of yours. Kairos saves a copy of your current data first."
+        confirm.addButton(withTitle: "Replace")
+        confirm.addButton(withTitle: "Cancel")
+        guard confirm.runModal() == .alertFirstButtonReturn else { return }
+        let done = NSAlert()
+        do {
+            let backup = try model.importData(file)
+            done.messageText = "Imported"
+            done.informativeText = backup.map { "Your previous data is in \u{201C}\($0.lastPathComponent)\u{201D}, in \($0.deletingLastPathComponent().path)." }
+                ?? "There was no saved data to back up."
+            if let backup { done.addButton(withTitle: "OK"); done.addButton(withTitle: "Show in Finder")
+                if done.runModal() == .alertSecondButtonReturn { NSWorkspace.shared.activateFileViewerSelecting([backup]) }
+                return
+            }
+        } catch {
+            done.messageText = "Import failed"
+            done.informativeText = "Nothing was changed. \(error.localizedDescription)"
+        }
+        done.runModal()
     }
 
     private func export() {
