@@ -5,12 +5,23 @@ import KairosCore
 import SwiftUI
 
 /// `Kairos --snapshot <dir>` renders every view to PNG files instead of launching the app.
+/// `Kairos --install-bridge` points the browsers' native messaging manifests at this copy's host
+/// and exits (scripts/build-app.sh --install runs it).
 @main
 enum Entry {
     @MainActor static func main() {
         let args = CommandLine.arguments
         if let i = args.firstIndex(of: "--snapshot") {
             Snapshot.run(into: URL(fileURLWithPath: i + 1 < args.count ? args[i + 1] : "snapshots"))
+        } else if args.contains("--install-bridge") {
+            let browsers = BridgeInstaller.install()
+            if DataStore.isScratch {
+                print("KAIROS_HOME is set, so the real browser manifests were left alone.")
+            } else {
+                print(browsers.isEmpty ? "No Chromium browser profile found; nothing to point at \(BridgeInstaller.hostPath)."
+                                       : "Kairos Shield and Kairos Read now reach \(BridgeInstaller.hostPath) in: \(browsers.joined(separator: ", ")).")
+            }
+            exit(0)
         } else if handOffToRunningCopy() {
             exit(0)
         } else {
@@ -40,6 +51,11 @@ struct KairosApp: App {
                 .frame(minWidth: 860, minHeight: 560)
         }
         .defaultSize(width: 1000, height: 660)
+        .commands {
+            CommandGroup(replacing: .appTermination) {
+                QuitButton().environmentObject(model)
+            }
+        }
 
         MenuBarExtra {
             MenuBarMenu().environmentObject(model)
@@ -69,6 +85,10 @@ struct MenuBarMenu: View {
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
+        if model.siteBlockingOff {
+            Label("Site blocking is off: Kairos Shield isn\u{2019}t connected", systemImage: "exclamationmark.triangle")
+            Divider()
+        }
         if let task = model.currentTask {
             Text(task.title)
             Button("Mark done") { model.setDone(task, true) }
@@ -77,11 +97,13 @@ struct MenuBarMenu: View {
         }
         Divider()
         if model.tempo.phase == .idle {
-            Button("Start focus") { model.startFocus() }.keyboardShortcut(.space, modifiers: [.option, .shift])
+            if model.tempo.awaitingFocus { Text("Break over") }
+            Button("Start focus") { model.requestStartFocus() }.keyboardShortcut(model.timerShortcut)
+            if model.tempo.awaitingFocus { Button("Not now") { model.endBreakWait() } }
         } else {
             Text("\(model.tempo.phase.label) · \(clock(model.remaining))")
-            Button(model.tempo.isPaused ? "Resume" : "Pause") { model.toggleTimer() }.keyboardShortcut(.space, modifiers: [.option, .shift])
-            Button("Skip") { model.skipPhase() }.disabled(model.strictLocked)
+            Button(model.tempo.isPaused ? "Resume" : "Pause") { model.toggleTimer() }.keyboardShortcut(model.timerShortcut)
+            Button("Skip") { model.requestSkip() }.disabled(model.strictLocked)
             Button("+5 min") { model.addFiveMinutes() }
             Button("Stop") { model.stopTimer() }.disabled(model.strictLocked)
         }
@@ -94,19 +116,41 @@ struct MenuBarMenu: View {
             ForEach(model.data.groups) { Text($0.name).tag($0.id) }
         }
         Button("New Group…") { DockActions.newGroup(model) }
-        Picker("Mode", selection: Binding(get: { model.mode }, set: { model.setMode($0) })) {
-            ForEach(Mode.allCases, id: \.self) { Text($0.label).tag($0) }
-        }
-        .disabled(model.tempo.phase != .idle)
+        ModePicker()
         Divider()
-        Button("Quick add…") { AppDelegate.shared?.showQuickAdd() }.keyboardShortcut(.space, modifiers: .option)
+        Button("Quick add…") { AppDelegate.shared?.showQuickAdd() }.keyboardShortcut(model.quickAddShortcut)
         Button("Open Kairos") {
             openWindow(id: "main")
             NSApp.activate(ignoringOtherApps: true)
         }
         Toggle("Show Kairos Bar", isOn: $model.data.settings.dockVisible)
         Divider()
-        Button("Quit Kairos") { NSApp.terminate(nil) }.keyboardShortcut("q")
+        QuitButton()
+    }
+}
+
+/// Quit is off while a strict focus phase is locked; the reason shows where the button was.
+struct QuitButton: View {
+    @EnvironmentObject var model: AppModel
+
+    var body: some View {
+        if model.strictLocked, let until = model.data.focus.strictUntil {
+            Text("Strict until \(until.formatted(date: .omitted, time: .shortened)): Kairos can\u{2019}t be quit")
+        }
+        Button("Quit Kairos") { NSApp.terminate(nil) }.keyboardShortcut("q").disabled(model.strictLocked)
+    }
+}
+
+/// The one Mode control, in the menu bar menu and on Today. While a timer runs the timer owns
+/// the mode, so the control is locked (StrictMode.tla, PickerLockedByTimer).
+struct ModePicker: View {
+    @EnvironmentObject var model: AppModel
+
+    var body: some View {
+        Picker("Mode", selection: Binding(get: { model.mode }, set: { model.setMode($0) })) {
+            ForEach(Mode.allCases, id: \.self) { Text($0.label).tag($0) }
+        }
+        .disabled(model.tempo.phase != .idle)
     }
 }
 
@@ -119,7 +163,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var overlay: OverlayController?
     private var hotKeys = HotKeys()
     private var pendingHotKeys: DispatchWorkItem?
-    private let systemDock = SystemDock()
+    private static let dockRestoreScript = DataStore.defaultDirectory.appendingPathComponent("dock-restore.sh")
+    private let systemDock = SystemDock(restoreScript: AppDelegate.dockRestoreScript)
+    private let dockWatchdog = DockWatchdog(
+        agents: FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/LaunchAgents"),
+        restoreScript: AppDelegate.dockRestoreScript)
+    private var signalTrap: SignalTrap?
     private var cancellables: Set<AnyCancellable> = []
 
     override init() {
@@ -130,21 +179,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         let model = AppModel.shared
         model.start()
+        // `kill`, Ctrl-C or a closed terminal would otherwise end Kairos with the Dock still hidden.
+        signalTrap = SignalTrap { [weak self] _ in self?.endOnSignal() }
         if BridgeInstaller.installedBrowsers().isEmpty { BridgeInstaller.install() }
 
         dock = DockPanelController(model: model)
         quickAdd = QuickAddPanelController(model: model)
         overlay = OverlayController(model: model)
-        registerHotKeys(groups: model.data.settings.groupHotkeys)
+        model.confirmStrict = { confirmation in
+            NSApp.activate(ignoringOtherApps: true)
+            let alert = NSAlert()
+            alert.alertStyle = .warning
+            alert.messageText = confirmation.title
+            alert.informativeText = confirmation.message
+            alert.addButton(withTitle: "Start Strict Focus")
+            alert.addButton(withTitle: "Cancel")
+            return alert.runModal() == .alertFirstButtonReturn
+        }
+        registerHotKeys()
 
-        model.$data.map(\.settings.groupHotkeys).removeDuplicates().dropFirst()
-            .sink { [weak self] on in self?.registerHotKeys(groups: on) }
+        model.$data.map { HotkeyPlan($0.settings) }.removeDuplicates().dropFirst()
+            .sink { [weak self] _ in DispatchQueue.main.async { self?.registerHotKeys() } }
             .store(in: &cancellables)
         // Hiding Kairos Bar, by any route, brings the macOS Dock back until the bar returns.
         model.$data.map(\.settings.hidesSystemDock).removeDuplicates()
             .sink { [weak self] hide in
-                guard let self else { return }
+                guard let self, !DataStore.isScratch else { return }
                 if hide { self.systemDock.replace() } else { self.systemDock.restore() }
+            }
+            .store(in: &cancellables)
+        // The watchdog brings the Dock back after a crash or force quit. It exists while the switch is on.
+        model.$data.map(\.settings.replacesSystemDock).removeDuplicates()
+            .sink { [weak self] on in
+                guard let self, !DataStore.isScratch else { return }
+                if on { self.dockWatchdog.install() } else { self.dockWatchdog.remove() }
             }
             .store(in: &cancellables)
         if ProcessInfo.processInfo.environment["KAIROS_START_FOCUS"] == "1" { model.startFocus() } // scripts/bridge-check.py
@@ -158,17 +226,45 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         pendingHotKeys?.cancel()
         let work = DispatchWorkItem { [weak self] in
             self?.pendingHotKeys = nil
-            self?.registerHotKeys(groups: AppModel.shared.data.settings.groupHotkeys)
+            self?.registerHotKeys()
         }
         pendingHotKeys = work
         let sent = Spaces.switchTo(number)
         DispatchQueue.main.asyncAfter(deadline: .now() + (sent ? 0.35 : 0), execute: work)
     }
 
+    /// A strict focus phase cannot be quit. Logging out, restarting or shutting down still
+    /// quits, because refusing would hold up the Mac; the phase resumes at the next launch.
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard AppModel.shared.strictLocked, !Self.systemIsQuitting else { return .terminateNow }
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.messageText = "Strict focus is on"
+        let until = AppModel.shared.data.focus.strictUntil?.formatted(date: .omitted, time: .shortened) ?? "the session ends"
+        alert.informativeText = "Kairos can\u{2019}t be quit until \(until), when this strict session ends."
+        alert.runModal()
+        return .terminateCancel
+    }
+
+    private static var systemIsQuitting: Bool {
+        guard let event = NSAppleEventManager.shared().currentAppleEvent,
+              let reason = event.attributeDescriptor(forKeyword: AEKeyword(kAEQuitReason))?.enumCodeValue else { return false }
+        return [kAELogOut, kAEReallyLogOut, kAEShowRestartDialog, kAEShowShutdownDialog, kAERestart, kAEShutDown]
+            .map { OSType($0) }.contains(reason)
+    }
+
     /// The macOS Dock comes back whenever Kairos is not running to stand in for it.
     func applicationWillTerminate(_ notification: Notification) {
-        systemDock.restore()
+        if !DataStore.isScratch { systemDock.restore() }
         AppModel.shared.shutdown()
+    }
+
+    /// A termination signal cannot be refused, in Strict either: like a force quit, a strict
+    /// phase resumes at the next launch.
+    private func endOnSignal() {
+        if !DataStore.isScratch { systemDock.restore() }
+        AppModel.shared.shutdown()
+        exit(0)
     }
 
     // Closing the main window leaves the dock and menu bar item running.
@@ -182,18 +278,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.windows.first { $0.identifier?.rawValue.hasPrefix("main") == true }?.makeKeyAndOrderFront(nil)
     }
 
-    private func registerHotKeys(groups: Bool) {
+    private func registerHotKeys() {
         // A desktop switch in flight re-registers when it is done.
         guard pendingHotKeys == nil else { return }
         hotKeys.removeAll()
-        hotKeys.register(keyCode: UInt32(kVK_Space), modifiers: UInt32(optionKey)) { [weak self] in self?.quickAdd?.toggle() }
-        // Start, pause or resume the timer from anywhere.
-        hotKeys.register(keyCode: UInt32(kVK_Space), modifiers: UInt32(optionKey | shiftKey)) { AppModel.shared.toggleTimer() }
-        guard groups else { return }
-        let digits = [kVK_ANSI_1, kVK_ANSI_2, kVK_ANSI_3, kVK_ANSI_4, kVK_ANSI_5, kVK_ANSI_6, kVK_ANSI_7, kVK_ANSI_8, kVK_ANSI_9]
-        for (i, code) in digits.enumerated() {
-            hotKeys.register(keyCode: UInt32(code), modifiers: UInt32(controlKey)) { AppModel.shared.switchGroup(index: i) }
+        var failed: [String] = []
+        for entry in HotkeyPlan(AppModel.shared.data.settings).entries {
+            let action: () -> Void
+            switch entry.action {
+            case .quickAdd: action = { [weak self] in self?.quickAdd?.toggle() }
+            case .timer: action = { AppModel.shared.toggleTimer() }
+            case let .group(i): action = { AppModel.shared.switchGroup(index: i) }
+            }
+            if !hotKeys.register(keyCode: entry.keyCode, modifiers: entry.modifiers, action: action) { failed.append(entry.label) }
         }
+        AppModel.shared.hotkeyFailures = failed
     }
 }
 
@@ -205,15 +304,18 @@ final class HotKeys {
     private static var installed = false
     private static var nextID: UInt32 = 1
 
-    func register(keyCode: UInt32, modifiers: UInt32, action: @escaping () -> Void) {
+    /// False when macOS refused, usually because another app holds the same shortcut.
+    @discardableResult
+    func register(keyCode: UInt32, modifiers: UInt32, action: @escaping () -> Void) -> Bool {
         Self.installHandler()
         let id = Self.nextID
         Self.nextID += 1
         var ref: EventHotKeyRef?
         let hkID = EventHotKeyID(signature: OSType(0x4B414952), id: id) // 'KAIR'
-        guard RegisterEventHotKey(keyCode, modifiers, hkID, GetApplicationEventTarget(), 0, &ref) == noErr, let ref else { return }
+        guard RegisterEventHotKey(keyCode, modifiers, hkID, GetApplicationEventTarget(), 0, &ref) == noErr, let ref else { return false }
         Self.handlers[id] = action
         refs.append(ref)
+        return true
     }
 
     func removeAll() {

@@ -69,6 +69,7 @@ public final class JevClient: @unchecked Sendable {
             "state": state,
             "questions": [
                 "focus": [
+                    "type": "choice",
                     "instructions": "Is this \(noun) useful for the user's current task?",
                     "criteria": [
                         "relevant": "Directly helps with the task, or is a tool the task needs",
@@ -121,5 +122,29 @@ public final class JevClient: @unchecked Sendable {
     private func remember(_ key: String, _ verdict: JevVerdict, now: Date) {
         lock.lock(); defer { lock.unlock() }
         cache[key] = (verdict, now)
+    }
+}
+
+/// Whether Jev can judge anything for the active group, and if not, why.
+public enum JevReadiness: Equatable, Sendable {
+    case off, ready, noKey, noTask
+    case failing(String)
+
+    public init(enabled: Bool, hasKey: Bool, hasTask: Bool, lastError: String?) {
+        if !enabled { self = .off }
+        else if !hasKey { self = .noKey }
+        else if !hasTask { self = .noTask }
+        else if let lastError { self = .failing(lastError) }
+        else { self = .ready }
+    }
+
+    /// What to tell the owner, or nil when Jev is running or switched off.
+    public var problem: String? {
+        switch self {
+        case .off, .ready: return nil
+        case .noKey: return "Jev is on but has no TypeSafe API key, so only your block lists apply. Add the key in Settings."
+        case .noTask: return "Jev is on but there is no current task to compare with, so it is not judging anything. Start a task."
+        case let .failing(error): return "Jev could not answer the last check: \(error)"
+        }
     }
 }

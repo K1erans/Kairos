@@ -44,8 +44,16 @@ extension Color {
 
 enum GroupPalette {
     static let colors = ["#4F7CFF", "#2FA36B", "#E0703A", "#B45BD6", "#D6455B", "#2AA7B8", "#C9A227", "#6B7280"]
+    /// What VoiceOver and the tooltip call each colour, in the order of `colors`.
+    static let colorNames = ["Blue", "Green", "Orange", "Purple", "Red", "Teal", "Yellow", "Grey"]
     static let icons = ["briefcase.fill", "book.fill", "house.fill", "paintbrush.fill", "hammer.fill", "gamecontroller.fill",
                         "music.note", "graduationcap.fill", "chevron.left.forwardslash.chevron.right", "pencil", "heart.fill", "square.grid.2x2"]
+    private static let iconNames = ["briefcase.fill": "Briefcase", "book.fill": "Book", "house.fill": "House",
+                                    "paintbrush.fill": "Paintbrush", "hammer.fill": "Hammer", "gamecontroller.fill": "Game controller",
+                                    "music.note": "Music", "graduationcap.fill": "Graduation cap",
+                                    "chevron.left.forwardslash.chevron.right": "Code", "pencil": "Pencil", "heart.fill": "Heart",
+                                    "square.grid.2x2": "Grid"]
+    static func iconName(_ symbol: String) -> String { iconNames[symbol] ?? symbol }
 }
 
 /// An installed application, found by scanning the usual folders.
@@ -68,6 +76,34 @@ struct InstalledApp: Identifiable, Hashable {
             }
         }
         return out.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+}
+
+/// Downloads and Trash on Kairos Bar.
+enum Folders {
+    static func url(_ folder: DockFolder) -> URL? {
+        FileManager.default.urls(for: folder == .trash ? .trashDirectory : .downloadsDirectory, in: .userDomainMask).first
+    }
+
+    static func icon(_ folder: DockFolder, trashFull: Bool) -> NSImage {
+        if folder == .trash {
+            return NSImage(named: trashFull ? NSImage.trashFullName : NSImage.trashEmptyName) ?? NSImage()
+        }
+        guard let u = url(folder) else { return NSImage() }
+        return NSWorkspace.shared.icon(forFile: u.path)
+    }
+
+    /// Whether the Trash has anything in it. macOS may refuse to list it to an app without Full
+    /// Disk Access; then the bar shows it empty.
+    static var trashIsFull: Bool {
+        guard let u = url(.trash), let items = try? FileManager.default.contentsOfDirectory(atPath: u.path) else { return false }
+        return items.contains { $0 != ".DS_Store" }
+    }
+
+    /// Shows the folder in Finder.
+    static func open(_ folder: DockFolder) {
+        guard let u = url(folder) else { return }
+        NSWorkspace.shared.open(u)
     }
 }
 
@@ -100,13 +136,18 @@ enum Apps {
         NSWorkspace.shared.runningApplications.first { $0.bundleIdentifier == bundleId }
     }
 
+    /// Opens the app the way clicking it in the Dock does. For a running app, `activate()` alone
+    /// is often refused when Kairos is not frontmost (Kairos Bar never is) and shows no window when
+    /// the app has none open; opening it again brings it forward and sends the reopen event, so it
+    /// shows a window.
     static func open(_ bundleId: String) {
-        if let running = NSWorkspace.shared.runningApplications.first(where: { $0.bundleIdentifier == bundleId }) {
-            running.unhide()
-            running.activate()
-        } else if let u = url(bundleId) {
-            NSWorkspace.shared.openApplication(at: u, configuration: .init())
-        }
+        let running = NSWorkspace.shared.runningApplications.first { $0.bundleIdentifier == bundleId }
+        running?.unhide()
+        // The copy that is running, when there is more than one on the Mac.
+        guard let u = running?.bundleURL ?? url(bundleId) else { return }
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.activates = true
+        NSWorkspace.shared.openApplication(at: u, configuration: configuration)
     }
 
     /// The display showing the app's frontmost normal window. Window bounds need no permission.
@@ -149,6 +190,7 @@ enum BridgeInstaller {
     /// folder. Returns the browsers it was installed for.
     @discardableResult
     static func install() -> [String] {
+        guard !DataStore.isScratch else { return [] }
         let fm = FileManager.default
         let support = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         guard fm.isExecutableFile(atPath: hostPath),
@@ -183,15 +225,11 @@ enum BridgeInstaller {
 enum LoginItem {
     static var enabled: Bool { SMAppService.mainApp.status == .enabled }
     static func set(_ on: Bool) {
+        guard !DataStore.isScratch else { return }
         do { if on { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() } } catch {
             NSLog("Kairos: login item change failed: \(error.localizedDescription)")
         }
     }
-}
-
-func clock(_ seconds: TimeInterval) -> String {
-    let s = max(0, Int(seconds.rounded(.up)))
-    return String(format: "%d:%02d", s / 60, s % 60)
 }
 
 enum Spaces {

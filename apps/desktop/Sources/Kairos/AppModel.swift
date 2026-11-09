@@ -32,6 +32,8 @@ final class AppModel: ObservableObject {
     @Published var suggestion: TaskItem?
     @Published var notice: BlockNotice?
     @Published private(set) var hasJevKey = false
+    /// Shortcuts macOS would not register, as labels such as "⌥Space".
+    @Published var hotkeyFailures: [String] = []
     @Published private(set) var hasClaudeKey = false
     @Published private(set) var voiceKeys: Set<String> = []
     @Published var cloudVoices: [CloudVoice] = []
@@ -60,20 +62,28 @@ final class AppModel: ObservableObject {
     private var lastPushed = Data()
     private var hiddenBySwitch: [UUID: [String]] = [:]
     private var observers: [NSObjectProtocol] = []
+    private var reminders: AnyCancellable?
+    private var grantTimer: Timer?
+    /// The app guard hides apps only in the running app, never in the snapshot tool or a
+    /// scratch copy (bridge-check), which would otherwise hide the owner's real apps.
+    private var guardsApps = false
 
     /// `readKeys: false` skips the Keychain, so the snapshot tool never triggers an access prompt.
     init(store: DataStore = .standard(), readKeys: Bool = true) {
         self.store = store
-        var loaded = store.load()
-        loaded.recoverAfterLaunch()
+        var loaded = store.load(starter: { .starter(browser: Browsers.preferredChromium { Apps.url($0) != nil }) })
+        let resume = loaded.recoverAfterLaunch()
         data = loaded
-        tempo = TempoEngine(preset: loaded.preset(named: loaded.activeGroup?.tempoPreset ?? "Classic"))
+        var engine = TempoEngine(preset: loaded.preset(named: loaded.activeGroup?.tempoPreset ?? "Classic"))
+        if let resume { engine.resumeStrict(resume) }
+        tempo = engine
         if readKeys { refreshKeys() }
     }
 
     // MARK: Lifecycle
 
     func start() {
+        guardsApps = !DataStore.isScratch
         bridge.onMessage = { [weak self] client, message in
             Task { @MainActor in self?.handle(message, from: client) }
         }
@@ -104,7 +114,37 @@ final class AppModel: ObservableObject {
         }
         refreshRunning()
         saveNow() // keeps what launch recovery logged
+        if mode.blocks { sweepSoon() } // a strict phase resumed after a quit
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
+        // A scratch copy (bridge-check) must not put its tasks in the owner's Notification Center.
+        guard !DataStore.isScratch else { return }
+        reminders = $data.map(DueReminders.Inputs.init).removeDuplicates()
+            .debounce(for: .seconds(1), scheduler: RunLoop.main)
+            .sink { [weak self] _ in self?.scheduleDueReminders() }
+        observers.append(NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in self?.scheduleDueReminders() }
+        })
+    }
+
+    /// Replaces Kairos's pending due reminders with the current plan: the soonest 64, which is
+    /// all macOS keeps. Runs when tasks change and when Kairos comes forward, so later tasks
+    /// get theirs as earlier ones fire.
+    private func scheduleDueReminders() {
+        let plan = DueReminders.plan(DueReminders.Inputs(data), now: Date())
+        UNUserNotificationCenter.current().getPendingNotificationRequests { pending in
+            let center = UNUserNotificationCenter.current()
+            let stale = pending.map(\.identifier).filter { $0.hasPrefix(DueReminder.idPrefix) }
+            center.removePendingNotificationRequests(withIdentifiers: stale)
+            for reminder in plan {
+                let content = UNMutableNotificationContent()
+                content.title = reminder.title
+                content.body = reminder.body
+                content.sound = .default
+                let when = Calendar.current.dateComponents([.year, .month, .day, .hour, .minute, .second], from: reminder.fireAt)
+                center.add(UNNotificationRequest(identifier: reminder.id, content: content,
+                                                 trigger: UNCalendarNotificationTrigger(dateMatching: when, repeats: false)))
+            }
+        }
     }
 
     func shutdown() {
@@ -141,6 +181,20 @@ final class AppModel: ObservableObject {
     }
 
     func exportJSON() -> Data? { try? DataStore.encoder.encode(data) }
+
+    /// Import is refused while a timer runs, so it can never end or change a focus phase.
+    var canImport: Bool { tempo.phase == .idle }
+
+    /// Replaces everything with an exported file, after saving and backing up the current file.
+    /// Returns the backup, nil when there was no file to back up yet.
+    func importData(_ file: AppData) throws -> URL? {
+        guard canImport else { throw ImportProblem.timerRunning }
+        saveNow()
+        let backup = try store.backup(now: Date())
+        data = data.importing(file, now: Date())
+        tempo.use(data.preset(named: activeGroup?.tempoPreset ?? "Classic"))
+        return backup
+    }
 
     // MARK: Keys
 
@@ -184,10 +238,45 @@ final class AppModel: ObservableObject {
     var progress: Double { tempo.progress(now: now) }
     var overridesLeft: Int { ledger.remaining(max: data.settings.maxOverridesPerSession) }
 
+    /// Blocking is on but no Kairos Shield is connected, so no site rule is enforced anywhere.
+    func setupChecklist(accessibility: Bool, openAtLogin: Bool) -> SetupChecklist {
+        var facts = SetupFacts()
+        facts.seenClients = Set(data.seenClients).union(bridgeClients)
+        facts.hasJevKey = hasJevKey
+        facts.hasClaudeKey = hasClaudeKey
+        facts.voiceProvider = data.settings.voiceProvider
+        facts.hasVoiceKey = data.settings.voiceProvider.keyAccount.map { voiceKeys.contains($0) } ?? false
+        facts.accessibility = accessibility
+        facts.openAtLogin = openAtLogin
+        facts.replacesDock = data.settings.replacesSystemDock
+        return SetupChecklist(facts)
+    }
+
+    /// The menu bar menu shows the chosen shortcuts.
+    var quickAddShortcut: KeyboardShortcut? { Self.shortcut(Hotkeys.choice(data.settings.quickAddHotkey, in: Hotkeys.quickAdd)) }
+    var timerShortcut: KeyboardShortcut? { Self.shortcut(Hotkeys.choice(data.settings.timerHotkey, in: Hotkeys.timer)) }
+
+    private static func shortcut(_ choice: HotkeyChoice?) -> KeyboardShortcut? {
+        guard let choice else { return nil }
+        var modifiers: EventModifiers = []
+        if choice.modifiers & HotkeyChoice.command != 0 { modifiers.insert(.command) }
+        if choice.modifiers & HotkeyChoice.shift != 0 { modifiers.insert(.shift) }
+        if choice.modifiers & HotkeyChoice.option != 0 { modifiers.insert(.option) }
+        if choice.modifiers & HotkeyChoice.control != 0 { modifiers.insert(.control) }
+        return KeyboardShortcut(KeyEquivalent(choice.character), modifiers: modifiers)
+    }
+
+    var siteBlockingOff: Bool { mode.blocks && !shieldConnected }
+    var shieldConnected: Bool { bridgeClients.contains("shield") }
+    static let siteBlockingOffText = "Site blocking is off: Kairos Shield isn\u{2019}t connected, so your blocked sites open normally. Open Chrome (or another Chromium browser) with Kairos Shield loaded."
+
+    func jevReadiness(for group: AppGroup?) -> JevReadiness {
+        JevReadiness(enabled: group?.jevEnabled ?? false, hasKey: hasJevKey, hasTask: currentTask != nil, lastError: lastJevError)
+    }
+
     var menuTitle: String {
-        let name = currentTask?.title ?? activeGroup?.name ?? "Kairos"
-        let short = name.count > 28 ? String(name.prefix(27)) + "…" : name
-        return tempo.phase == .idle ? short : "\(short) · \(clock(remaining))"
+        MenuBarTitle.make(name: currentTask?.title ?? activeGroup?.name ?? "Kairos", phase: tempo.phase,
+                          remaining: remaining, awaitingFocus: tempo.awaitingFocus)
     }
 
     func tasks(in groupId: UUID?, done: Bool = false) -> [TaskItem] {
@@ -254,17 +343,24 @@ final class AppModel: ObservableObject {
         if data.focus.mode == .off { setMode(.focus) }
     }
 
+    /// "Start" on a task: make it current and, when no timer is running, start a focus session
+    /// on it (asking first if that session is strict). A running timer carries on with this task.
+    func startTask(_ task: TaskItem) {
+        suggestion = nil
+        if let g = task.groupId, g != data.focus.activeGroupId { switchGroup(g) }
+        data.focus.currentTaskId = task.id
+        if tempo.phase == .idle { requestStartFocus() }
+    }
+
     // MARK: Groups and mode
 
     func switchGroup(_ id: UUID) {
         guard id != data.focus.activeGroupId, let next = data.group(id) else { return }
         let previous = data.activeGroup
-        var focus = data.focus
-        focus.activeGroupId = id
-        if let task = data.currentTask, task.groupId != id { focus.currentTaskId = nil }
-        data.focus = focus
+        data.focus = data.focusAfterSwitch(to: id)
         tempo.use(data.preset(named: next.tempoPreset))
         if next.desktop > 0 { AppDelegate.shared?.switchDesktop(next.desktop) }
+        sweepSoon()
 
         guard data.settings.switchBehavior == .hide else { return }
         let apps = NSWorkspace.shared.runningApplications.filter { $0.activationPolicy == .regular }
@@ -291,6 +387,7 @@ final class AppModel: ObservableObject {
         // Entering Strict also clears grants, so an "Allow 5 min" made in Focus cannot carry over.
         if (new.blocks && !old.blocks) || (new == .strict && old != .strict) { ledger.reset() }
         if !new.blocks, case .app = notice?.kind { notice = nil }
+        if new.blocks && !old.blocks { sweepSoon() }
     }
 
     @discardableResult
@@ -331,9 +428,22 @@ final class AppModel: ObservableObject {
         data.groups[i].dockApps.append(bundleId)
     }
 
+    /// "Block in <group>" from Kairos Bar. A newly blocked app on screen is hidden at once.
+    func setAppBlocked(_ bundleId: String, _ blocked: Bool) {
+        if data.setAppBlocked(bundleId, blocked, strictLocked: strictLocked), blocked { sweepSoon() }
+    }
+
+    func isAppBlocked(_ bundleId: String) -> Bool { activeGroup?.blockedApps.contains(bundleId) ?? false }
+
     func removeDockApp(_ bundleId: String) {
         guard let i = data.groups.firstIndex(where: { $0.id == data.focus.activeGroupId }) else { return }
         data.groups[i].dockApps.removeAll { $0 == bundleId }
+    }
+
+    /// Moves a pinned app along Kairos Bar, from its menu or the Groups page.
+    func moveDockApp(_ bundleId: String, by offset: Int, in groupId: UUID? = nil) {
+        guard let i = data.groups.firstIndex(where: { $0.id == (groupId ?? data.focus.activeGroupId) }) else { return }
+        data.groups[i].dockApps = data.groups[i].dockApps.moving(bundleId, by: offset)
     }
 
     // MARK: Tempo
@@ -344,9 +454,36 @@ final class AppModel: ObservableObject {
         apply(tempo.start(.focus, strict: mode == .strict, now: Date()))
     }
 
+    /// What the owner must agree to before a strict focus phase starts. Set by the app; the
+    /// snapshot tool leaves it nil and never starts a timer.
+    var confirmStrict: ((StrictConfirmation) -> Bool)?
+
+    /// Start from a button or hotkey: a strict focus phase starts only once the owner agrees.
+    func requestStartFocus() {
+        let preset = data.preset(named: activeGroup?.tempoPreset ?? "Classic")
+        guard tempo.phase == .idle else { return }
+        if mode == .strict || preset.strict {
+            guard agreesToStrict(minutes: preset.focusMin) else { return }
+        }
+        startFocus()
+    }
+
+    /// Skip from a break: skipping into a strict focus phase starts a lock, so it asks too.
+    func requestSkip() {
+        if tempo.phase.isBreak, tempo.nextFocusIsStrict {
+            guard agreesToStrict(minutes: data.preset(named: activeGroup?.tempoPreset ?? "Classic").focusMin) else { return }
+        }
+        skipPhase()
+    }
+
+    private func agreesToStrict(minutes: Int) -> Bool {
+        guard let confirmStrict else { return true }
+        return confirmStrict(StrictConfirmation(minutes: minutes, endsAt: Date().addingTimeInterval(TimeInterval(minutes * 60))))
+    }
+
     func toggleTimer() {
         let t = Date()
-        if tempo.phase == .idle { startFocus() }
+        if tempo.phase == .idle { requestStartFocus() }
         else if tempo.isPaused { tempo.resume(now: t); syncFocusFromTempo() }
         else { tempo.pause(now: t); syncFocusFromTempo() }
     }
@@ -358,10 +495,28 @@ final class AppModel: ObservableObject {
     func stopTimer() { if !strictLocked { apply(tempo.stop(now: Date())) } }
     func addFiveMinutes() { tempo.extend(minutes: 5, now: Date()); syncFocusFromTempo() }
 
+    func endBreakWait() { tempo.endWait() }
+
+    /// The snapshot tool shows apps as open without opening them.
+    func showRunningForSnapshot(_ bundleIds: [String]) {
+        runningApps = Set(bundleIds)
+        openApps = bundleIds
+    }
+
+    /// The snapshot tool shows a running or waiting timer without waiting for one. Never called
+    /// by the running app, so it is no step in StrictMode.tla.
+    func showTimerForSnapshot(_ engine: TempoEngine) {
+        tempo = engine
+        syncFocusFromTempo()
+    }
+
     private func tick() {
         now = Date()
-        let events = tempo.tick(now: now)
+        let events = tempo.tick(now: now, startsFocusAfterBreak: data.settings.startsFocusAfterBreak)
         if !events.isEmpty { apply(events) }
+        // A paused strict phase would end later the longer it waits, so its saved end moves on.
+        if tempo.isPaused, strictLocked, let until = data.focus.strictUntil,
+           now.addingTimeInterval(remaining).timeIntervalSince(until) > 30 { syncFocusFromTempo() }
         // Keeps `openSession` fresh, so a crash loses at most a minute of the running phase.
         if tempo.phase != .idle, now.timeIntervalSince(lastSave) >= 60 { saveNow() }
     }
@@ -375,7 +530,10 @@ final class AppModel: ObservableObject {
                 if phase == .focus, completed {
                     notify("Focus session done", body: currentTask.map { "Done with \u{201C}\($0.title)\u{201D}? Time for a break." } ?? "Time for a break.")
                 } else if phase.isBreak, completed {
-                    notify("Break over", body: currentTask.map { "Back to \u{201C}\($0.title)\u{201D}." } ?? "Ready for the next session.")
+                    let body = tempo.awaitingFocus
+                        ? currentTask.map { "Start \u{201C}\($0.title)\u{201D} when you\u{2019}re ready." } ?? "Start the next focus session when you\u{2019}re ready."
+                        : currentTask.map { "Back to \u{201C}\($0.title)\u{201D}." } ?? "Ready for the next session."
+                    notify("Break over", body: body)
                 }
             case let .started(phase):
                 if phase == .focus {
@@ -384,7 +542,7 @@ final class AppModel: ObservableObject {
                 } else if data.settings.breakOverlay {
                     notice = BlockNotice(kind: .rest, title: phase.label, detail: "Step away from the screen.")
                 }
-            case .stopped:
+            case .stopped, .awaitingFocus:
                 notice = nil
                 data.focus.mode = .off
             }
@@ -397,6 +555,8 @@ final class AppModel: ObservableObject {
         var focus = data.focus
         if tempo.phase != .idle { focus.mode = tempo.mode }
         focus.endsAt = tempo.isRunning ? tempo.endsAt : nil
+        focus.strictUntil = tempo.phase == .focus && focus.mode == .strict
+            ? (tempo.isPaused ? Date().addingTimeInterval(tempo.remaining(now: Date())) : tempo.endsAt) : nil
         if focus != data.focus { data.focus = focus } else { objectWillChange.send() }
     }
 
@@ -410,48 +570,115 @@ final class AppModel: ObservableObject {
 
     // MARK: App guard
 
-    private static let neverGuard: Set<String> = [
-        "com.apple.finder", "com.apple.dock", "com.apple.systempreferences", "com.apple.loginwindow",
-        "com.apple.Spotlight", "com.apple.controlcenter", "com.apple.notificationcenterui", "com.apple.SecurityAgent",
-        "com.apple.Terminal", "com.apple.ActivityMonitor",
-    ]
-
     private func appActivated(_ app: NSRunningApplication) {
-        guard mode.blocks, let group = activeGroup, let bid = app.bundleIdentifier,
-              bid != Bundle.main.bundleIdentifier, !Self.neverGuard.contains(bid),
-              !ledger.isAllowed(bid, now: Date()) else { return }
+        guard guardsApps, mode.blocks, let group = activeGroup, let bid = app.bundleIdentifier else { return }
+        let now = Date()
         let name = app.localizedName ?? bid
-        if group.blockedApps.contains(bid) {
-            block(app, name: name, layer: "app", detail: "\(name) is blocked in \(group.name).")
+        if let reason = guardContext(now: now).reason(bid) {
+            block(app, name: name, reason: reason, group: group)
             return
         }
         // Jev judges apps that are on no list. Apps in the group's dock are trusted.
-        guard group.jevEnabled, hasJevKey, !group.dockApps.contains(bid), let task = currentTask else { return }
-        var subject = JevClient.Subject(kind: "app")
-        subject.app = name
-        subject.title = Apps.frontWindowTitle(pid: app.processIdentifier) ?? ""
+        guard group.jevEnabled, hasJevKey, !group.dockApps.contains(bid), bid != Bundle.main.bundleIdentifier,
+              !AppGuard.neverGuard.contains(bid), !ledger.isAllowed(bid, now: now), let task = currentTask else { return }
+        let windowTitle = Apps.frontWindowTitle(pid: app.processIdentifier) ?? ""
+        let subject = Privacy.appSubject(name: name, bundleId: bid, windowTitle: windowTitle)
         let key = Keychain.get("typesafe")
         let threshold = group.jevThreshold
         Task {
-            guard let verdict = try? await jev.check(apiKey: key, task: task.title, group: group.name,
-                                                     groupId: group.id.uuidString, subject: subject) else { return }
+            let verdict: JevVerdict
+            do {
+                verdict = try await jev.check(apiKey: key, task: task.title, group: group.name, groupId: group.id.uuidString, subject: subject)
+                self.lastJevError = nil
+            } catch {
+                self.lastJevError = error.localizedDescription
+                return
+            }
             // Only act if the window Jev judged is still in front and we are still blocking.
             guard verdict.shouldBlock(threshold: threshold), self.mode.blocks,
                   NSWorkspace.shared.frontmostApplication?.bundleIdentifier == bid,
-                  (Apps.frontWindowTitle(pid: app.processIdentifier) ?? "") == subject.title,
+                  (Apps.frontWindowTitle(pid: app.processIdentifier) ?? "") == windowTitle,
                   !self.ledger.isAllowed(bid, now: Date()) else { return }
             self.block(app, name: name, layer: "jev", detail: "Jev thinks \(name) is a distraction from your task.")
         }
     }
 
+    /// Activation alone misses apps that are already open, so blocking starting, a group switch
+    /// and an "Allow" running out each check every visible app, and the frontmost one with Jev.
+    private func sweepSoon() {
+        // After the change that triggered it has landed in `data`.
+        DispatchQueue.main.async { [weak self] in self?.sweep() }
+    }
+
+    private func sweep() {
+        guard guardsApps, mode.blocks, let group = activeGroup else { return }
+        let apps = NSWorkspace.shared.runningApplications.filter { $0.activationPolicy == .regular }
+        let hide = guardContext(now: Date()).sweep(apps.compactMap { a in a.bundleIdentifier.map { AppGuard.App(bundleId: $0, visible: !a.isHidden) } })
+        let front = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+        // The frontmost app goes last, so the overlay names the app the owner was looking at.
+        for item in hide.filter({ $0.bundleId != front }) + hide.filter({ $0.bundleId == front }) {
+            guard let app = apps.first(where: { $0.bundleIdentifier == item.bundleId }) else { continue }
+            block(app, name: app.localizedName ?? item.bundleId, reason: item.reason, group: group)
+        }
+        if let app = NSWorkspace.shared.frontmostApplication, let bid = front, !hide.contains(where: { $0.bundleId == bid }) {
+            appActivated(app)
+        }
+    }
+
+    private func guardContext(now: Date) -> AppGuard.Context {
+        AppGuard.Context(mode: mode, group: activeGroup, own: Bundle.main.bundleIdentifier, shieldConnected: shieldConnected,
+                         blocksUnshieldedBrowsers: data.settings.blockUnshieldedBrowsers,
+                         isAllowed: { [ledger] in ledger.isAllowed($0, now: now) })
+    }
+
+    private func block(_ app: NSRunningApplication, name: String, reason: AppGuard.Reason, group: AppGroup) {
+        switch reason {
+        case .listed:
+            block(app, name: name, layer: "app", detail: "\(name) is blocked in \(group.name).")
+        case .browserWithoutShield:
+            guard let bid = app.bundleIdentifier else { return }
+            if Browsers.isChromium(bid), !app.isTerminated {
+                // Ask again once Shield has had time to connect from a browser that just opened.
+                DispatchQueue.main.asyncAfter(deadline: .now() + AppGuard.shieldGrace) { [weak self] in
+                    guard let self, !app.isTerminated, !app.isHidden,
+                          self.guardContext(now: Date()).reason(bid) == .browserWithoutShield else { return }
+                    self.blockUnshielded(app, name: name)
+                }
+                return
+            }
+            blockUnshielded(app, name: name)
+        }
+    }
+
+    private func blockUnshielded(_ app: NSRunningApplication, name: String) {
+        let why = Browsers.isChromium(app.bundleIdentifier ?? "")
+            ? "Kairos Shield isn\u{2019}t connected, so your blocked sites would open in \(name)."
+            : "Kairos Shield can\u{2019}t run in \(name), so your blocked sites would open there."
+        block(app, name: name, layer: "app", detail: why + " Use a Chromium browser with Kairos Shield, or turn this off in Settings > Blocking.")
+    }
+
+    /// Hides, in Strict too: quitting would lose the owner's unsaved work in that app.
     private func block(_ app: NSRunningApplication, name: String, layer: String, detail: String) {
         guard let bid = app.bundleIdentifier else { return }
-        let strict = mode == .strict
         let screen = Apps.displayShowing(pid: app.processIdentifier) // before its windows go
-        if strict { app.terminate() } else { app.hide() }
+        app.hide()
         data.logBlock(BlockEvent(groupId: data.focus.activeGroupId, target: bid, label: name, layer: layer))
-        notice = BlockNotice(kind: .app(bundleId: bid), title: strict ? "\(name) was quit" : "\(name) is hidden",
-                             detail: detail, screen: screen)
+        notice = BlockNotice(kind: .app(bundleId: bid), title: "\(name) is hidden", detail: detail, screen: screen)
+    }
+
+    /// An "Allow" running out changes `temporaryAllows` and may leave a blocked app on screen.
+    private func scheduleGrantExpiry() {
+        grantTimer?.invalidate()
+        grantTimer = nil
+        guard let next = ledger.nextExpiry(after: Date()) else { return }
+        grantTimer = Timer.scheduledTimer(withTimeInterval: max(0.2, next.timeIntervalSinceNow + 0.05), repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.pushState()
+                self.sweep()
+                self.scheduleGrantExpiry()
+            }
+        }
     }
 
     /// Whether the overlay offers "Allow": read live, so it goes as soon as overrides run out.
@@ -478,12 +705,13 @@ final class AppModel: ObservableObject {
         if case .success = result {
             data.markOverridden(target: target)
             pushState()
+            scheduleGrantExpiry()
         }
         return result
     }
 
     func dismissNotice() {
-        if notice?.kind == .rest { skipPhase() }
+        if notice?.kind == .rest { requestSkip() }
         notice = nil
     }
 
@@ -511,10 +739,18 @@ final class AppModel: ObservableObject {
             bridge.send(p, to: client)
         }
         let stateMessage: [String: Any] = ["type": "state", "state": BridgeState.payload(data: data, ledger: ledger, cloudVoice: cloudVoiceReady)]
+        if let refusal = Privacy.refusal(m, neverAnalyse: data.settings.neverAnalyse) {
+            // tts.prefetch has no id and expects no answer, so it is simply dropped.
+            if id != nil { reply(["type": "error", "message": refusal]) }
+            return
+        }
 
         switch type {
         case "hello":
             bridge.setName(str("client"), for: client)
+            if ["shield", "read"].contains(str("client")), !data.seenClients.contains(str("client")) {
+                data.seenClients.append(str("client"))
+            }
             reply(stateMessage)
         case "getState":
             reply(stateMessage)
@@ -535,6 +771,10 @@ final class AppModel: ObservableObject {
             let host = Rules.normalizeSite(str("host")), selector = str("selector")
             guard !host.isEmpty, !selector.isEmpty else { return }
             data.updateActiveGroup { $0.hideElement(selector, on: host) }
+        case "rule.addSite":
+            guard let list = SiteList(rawValue: str("list")) else { return }
+            // A refused allow (Strict) changes nothing; the push tells the extension so.
+            if !data.addSite(str("site"), to: list, strictLocked: strictLocked) { pushState(force: true) }
         case "rule.removeElement":
             let host = Rules.normalizeSite(str("host")), selector = str("selector")
             guard !host.isEmpty, !selector.isEmpty else { return }

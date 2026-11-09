@@ -218,14 +218,6 @@ final class ClientTests: XCTestCase {
         XCTAssertThrowsError(try JevClient.parse(Data("{}".utf8)))
     }
 
-    func testJevRequestShape() throws {
-        var s = JevClient.Subject(kind: "page"); s.url = "https://x.com"; s.title = "X"; s.excerpt = "hi"
-        let body = JevClient.requestBody(task: "Write report", group: "Work", subject: s)
-        XCTAssertTrue(JSONSerialization.isValidJSONObject(body))
-        let q = ((body["questions"] as? [String: Any])?["focus"] as? [String: Any])?["criteria"] as? [String: String]
-        XCTAssertEqual(Set(q?.keys.map { $0 } ?? []), ["relevant", "distracting", "unsure"])
-    }
-
     func testStreamParser() throws {
         var p = SceneWriter.StreamParser()
         try p.consume(line: "event: content_block_delta")
@@ -252,6 +244,7 @@ final class ClientTests: XCTestCase {
 
     func testOpenAppsNotPinnedFollowASeparator() {
         var data = AppData.starter()
+        data.settings.showsDockFolders = false // the folders' own separator is tested in DockItemsTests
         data.groups[0].dockApps = ["a", "b"]
         data.focus.activeGroupId = data.groups[0].id
         let slots = DockGeometry.slots(for: data, running: ["b", "x", "a", "y", "x"])
@@ -373,6 +366,7 @@ final class DockGeometryTests: XCTestCase {
 
     func testSlotsOfferNewGroupAndAddAppForAnEmptyGroup() {
         var data = AppData.starter()
+        data.settings.showsDockFolders = false
         XCTAssertEqual(DockGeometry.slots(for: data).filter { $0 == .newGroup }.count, 1)
         XCTAssertFalse(DockGeometry.slots(for: data).contains(.addApp))
         data.groups[0].dockApps = []

@@ -3,10 +3,12 @@
 profile (KAIROS_HOME), and checks the bridge end to end. Never touches the real profile.
 
 Usage: scripts/bridge-check.py [path/to/Kairos.app]
+The default is apps/desktop/build/Kairos.app, whatever directory it is run from.
 """
 import json, os, socket, struct, subprocess, sys, tempfile, threading, time, uuid
 
-APP = os.path.abspath(sys.argv[1] if len(sys.argv) > 1 else "build/Kairos.app")
+DEFAULT_APP = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "build", "Kairos.app")
+APP = os.path.abspath(sys.argv[1] if len(sys.argv) > 1 else DEFAULT_APP)
 HOME = tempfile.mkdtemp(prefix="kairos-check-")
 SOCK = os.path.join(HOME, "bridge.sock")
 DATA = os.path.join(HOME, "kairos.json")
@@ -141,8 +143,41 @@ def relaunch_check():
     wait_for(lambda: not listening(), 3)
 
 
+def strict_relaunch_check():
+    """A strict focus phase saved before a quit comes back strict, with its end, at launch."""
+    seed()
+    with open(DATA) as f:
+        data = json.load(f)
+    until = int(time.time()) + 20 * 60
+    stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(until))
+    data["focus"].update({"mode": "strict", "strictUntil": stamp, "endsAt": stamp})
+    data["settings"]["overrideMinutes"] = 7
+    with open(DATA, "w") as f:
+        json.dump(data, f)
+    app = subprocess.Popen([os.path.join(APP, "Contents/MacOS/Kairos")], env=dict(ENV, KAIROS_START_FOCUS="0"),
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        wait_for(listening)
+        host = Host()
+        host.send({"type": "getState", "id": "strict"})
+        state = (host.reply("strict") or {}).get("state", {})
+        check("a strict phase saved before a quit resumes strict, with the same end",
+              state.get("mode") == "strict" and state.get("strictUntil") == until * 1000,
+              f"mode {state.get('mode')}, strictUntil {state.get('strictUntil')}, expected {until * 1000}")
+        check("the pushed state carries overrideMinutes", state.get("overrideMinutes") == 7, f"{state.get('overrideMinutes')}")
+        host.send({"type": "override.request", "id": "so", "target": "youtube.com", "reason": "please"})
+        r = host.reply("so") or {}
+        check("the resumed strict phase refuses overrides", r.get("allowed") is False, json.dumps(r))
+        host.close()
+    finally:
+        app.terminate()
+        app.wait(timeout=5)
+    wait_for(lambda: not listening(), 3)
+
+
 def main():
     relaunch_check()
+    strict_relaunch_check()
     seed()
     app = subprocess.Popen([os.path.join(APP, "Contents/MacOS/Kairos")], env=ENV,
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -188,6 +223,17 @@ def main():
         pushed = (host.latest_state() or {}).get("rules", {}).get("hiddenElements", {}).get("news.com")
         check("rule.removeElement pushes state without being asked", pushed == ["#b"], f"pushed news.com={pushed}")
 
+        # rule.addSite puts the site on one list of the active group, takes it off the other, and pushes state.
+        host.send({"type": "rule.addSite", "site": "https://www.news.example/today", "list": "block"})
+        host.send({"type": "rule.addSite", "site": "reddit.com", "list": "allow"})
+        def lists():
+            rules = (host.latest_state() or {}).get("rules", {})
+            return rules.get("blockSites", []), rules.get("allowSites", [])
+        wait_for(lambda: "news.example" in lists()[0] and "reddit.com" in lists()[1], 3)
+        block, allow = lists()
+        check("rule.addSite blocks one site and moves another to the allow list",
+              "news.example" in block and "reddit.com" in allow and "reddit.com" not in block, f"block {block}, allow {allow}")
+
         # D4: the override marks the event for the site that was allowed, not the newest one.
         host.send({"type": "blockEvent", "target": "https://www.youtube.com/watch?v=1", "layer": "rule", "overridden": False})
         host.send({"type": "blockEvent", "target": "https://reddit.com/r/all", "layer": "rule", "overridden": False})
@@ -205,6 +251,15 @@ def main():
         check("read.log with no current task is kept, not dropped",
               d.get("unassignedListenedSec") == 30 and listened == [0],
               f"unassigned={d.get('unassignedListenedSec')} task listenedSec={listened}")
+
+        # Privacy: the app refuses cloud voice for a page on the never-analyse list (the default
+        # list has mail.google.com). The scratch profile has no cloud voice, so without the check
+        # this would still be an error, but one that does not name the site.
+        host.send({"type": "tts.speak", "id": "p1", "text": "You have 3 new emails.", "rate": 1,
+                   "url": "https://mail.google.com/mail/u/0/#inbox"})
+        r = host.reply("p1")
+        check("tts.speak for a never-analyse page is refused with an error naming the site",
+              r is not None and r.get("type") == "error" and "mail.google.com" in r.get("message", ""), json.dumps(r))
 
         # D1: a second launch on the same profile hands off and exits; the first keeps the socket.
         second = subprocess.Popen([os.path.join(APP, "Contents/MacOS/Kairos")], env=ENV,

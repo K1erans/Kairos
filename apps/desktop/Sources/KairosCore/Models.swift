@@ -215,7 +215,12 @@ public struct Settings: Codable, Hashable, Sendable {
     public var overrideMinutes: Int = 5
     public var breakOverlay: Bool = true
     /// Control-1...9 switch groups. Off if it clashes with Mission Control shortcuts.
-    public var groupHotkeys: Bool = true
+    /// ⌃1 to ⌃9 switch groups. Off for new profiles: macOS uses them for "Switch to Desktop".
+    public var groupHotkeys: Bool = false
+    /// A `Hotkeys.quickAdd` id, or "off".
+    public var quickAddHotkey: String = "option-space"
+    /// A `Hotkeys.timer` id, or "off".
+    public var timerHotkey: String = "option-shift-space"
     public var voiceProvider: VoiceProvider = .system
     /// Voice id for the chosen cloud provider; empty means that provider's default.
     public var voiceId: String = ""
@@ -223,6 +228,14 @@ public struct Settings: Codable, Hashable, Sendable {
     public var autoHideBar: Bool = false
     /// Keep the macOS Dock hidden while Kairos Bar is on screen.
     public var replacesSystemDock: Bool = false
+    /// A notification when a task's due time comes.
+    public var notifiesWhenDue: Bool = true
+    /// Downloads and Trash at the end of Kairos Bar.
+    public var showsDockFolders: Bool = true
+    /// After a break runs out, start the next focus phase at once instead of waiting.
+    public var startsFocusAfterBreak: Bool = false
+    /// In Focus and Strict, hide a browser that Kairos Shield is not running in.
+    public var blockUnshieldedBrowsers: Bool = true
 
     public init() {}
 
@@ -233,6 +246,15 @@ public struct Settings: Codable, Hashable, Sendable {
     ]
 }
 
+extension Settings {
+    /// A voice id belongs to one provider, so choosing another provider starts from its default voice.
+    public mutating func setVoiceProvider(_ provider: VoiceProvider) {
+        guard provider != voiceProvider else { return }
+        voiceProvider = provider
+        voiceId = ""
+    }
+}
+
 extension Settings: Lenient {
     public static var fallback: Settings { Settings() }
     public static let fields: [LenientField<Settings>] = [
@@ -240,8 +262,10 @@ extension Settings: Lenient {
         .field("switchBehavior", \.switchBehavior), .field("presets", \.presets), .field("neverAnalyse", \.neverAnalyse),
         .field("jevFailClosed", \.jevFailClosed), .field("maxOverridesPerSession", \.maxOverridesPerSession),
         .field("overrideMinutes", \.overrideMinutes), .field("breakOverlay", \.breakOverlay),
-        .field("groupHotkeys", \.groupHotkeys), .field("voiceProvider", \.voiceProvider), .field("voiceId", \.voiceId),
+        .field("groupHotkeys", \.groupHotkeys), .field("quickAddHotkey", \.quickAddHotkey), .field("timerHotkey", \.timerHotkey), .field("voiceProvider", \.voiceProvider), .field("voiceId", \.voiceId),
         .field("autoHideBar", \.autoHideBar), .field("replacesSystemDock", \.replacesSystemDock),
+        .field("blockUnshieldedBrowsers", \.blockUnshieldedBrowsers), .field("startsFocusAfterBreak", \.startsFocusAfterBreak), .field("showsDockFolders", \.showsDockFolders),
+        .field("notifiesWhenDue", \.notifiesWhenDue),
     ]
 }
 
@@ -250,6 +274,11 @@ public struct FocusState: Codable, Hashable, Sendable {
     public var currentTaskId: UUID?
     public var mode: Mode = .off
     public var endsAt: Date?
+    /// Group id -> the task that was current when that group was last left.
+    public var taskByGroup: [String: UUID] = [:]
+    /// While a strict focus phase is locked: when it ends (or, paused, would end if resumed now).
+    /// Saved so that quitting or a crash cannot end it, and pushed so Chrome keeps enforcing it.
+    public var strictUntil: Date?
     public init() {}
 }
 
@@ -257,7 +286,7 @@ extension FocusState: Lenient {
     public static var fallback: FocusState { FocusState() }
     public static let fields: [LenientField<FocusState>] = [
         .field("activeGroupId", \.activeGroupId), .field("currentTaskId", \.currentTaskId), .field("mode", \.mode),
-        .field("endsAt", \.endsAt),
+        .field("endsAt", \.endsAt), .field("strictUntil", \.strictUntil), .field("taskByGroup", \.taskByGroup),
     ]
 }
 
@@ -270,6 +299,10 @@ public struct AppData: Codable, Sendable {
     public var settings = Settings()
     public var focus = FocusState()
     public var onboarded = false
+    /// Extension clients ("shield", "read") that have connected at least once, for the setup list.
+    public var seenClients: [String] = []
+    /// The owner hid the setup list on Today.
+    public var setupHidden = false
     /// The timer phase running at the last save, kept so a quit or crash still logs it.
     public var openSession: Session?
     /// Kairos Read listening time while no task was current.
@@ -277,7 +310,9 @@ public struct AppData: Codable, Sendable {
 
     public init() {}
 
-    public static func starter() -> AppData {
+    /// `browser` takes Safari's place in the groups' apps: site rules only reach a browser that
+    /// can run Kairos Shield.
+    public static func starter(browser: String? = nil) -> AppData {
         var d = AppData()
         var work = AppGroup(name: "Work", icon: "briefcase.fill", colorHex: "#4F7CFF")
         work.dockApps = ["com.apple.mail", "com.apple.Safari", "com.apple.Notes", "com.apple.iCal"]
@@ -290,6 +325,10 @@ public struct AppData: Codable, Sendable {
         var personal = AppGroup(name: "Personal", icon: "house.fill", colorHex: "#E0703A")
         personal.dockApps = ["com.apple.MobileSMS", "com.apple.Photos", "com.apple.Music"]
         personal.jevEnabled = false
+        if let browser {
+            work.dockApps = work.dockApps.map { $0 == "com.apple.Safari" ? browser : $0 }
+            study.dockApps = study.dockApps.map { $0 == "com.apple.Safari" ? browser : $0 }
+        }
         d.groups = [work, study, personal]
         d.focus.activeGroupId = work.id
         return d
@@ -310,5 +349,6 @@ extension AppData: Lenient {
         .field("blockEvents", \.blockEvents), .field("settings", \.settings), .field("focus", \.focus),
         .field("onboarded", \.onboarded), .field("openSession", \.openSession),
         .field("unassignedListenedSec", \.unassignedListenedSec),
+        .field("seenClients", \.seenClients), .field("setupHidden", \.setupHidden),
     ]
 }

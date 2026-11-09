@@ -19,3 +19,11 @@ apps/desktop/Sources/Kairos/AppModel.swift	1	func stopTimer() { if !strictLocked
 apps/desktop/Sources/Kairos/AppModel.swift	1	let result = ledger.request(target: target, reason: reason, mode: mode, max: data.settings.maxOverridesPerSession,	Override
 apps/desktop/Sources/Kairos/KairosApp.swift	1	.disabled(model.tempo.phase != .idle)	PickerLockedByTimer in SetMode
 apps/desktop/Sources/Kairos/AppModel.swift	1	var strictLocked: Bool { tempo.phase == .focus && mode == .strict }	InStrictPhase
+apps/desktop/Sources/Kairos/KairosApp.swift	1	guard AppModel.shared.strictLocked, !Self.systemIsQuitting else { return .terminateNow }	QuitLocked in Quit (system quits are ForceQuit)
+apps/desktop/Sources/Kairos/KairosApp.swift	1	Button("Quit Kairos") { NSApp.terminate(nil) }.keyboardShortcut("q").disabled(model.strictLocked)	QuitLocked in Quit (menu bar menu and app menu)
+apps/desktop/Sources/Kairos/AppModel.swift	1	focus.strictUntil = tempo.phase == .focus && focus.mode == .strict	downStrict' = InStrictPhase in Quit and ForceQuit
+apps/desktop/Sources/KairosCore/History.swift	1	if let until = focus.strictUntil, until > now {	ResumesStrict in Relaunch
+apps/desktop/Sources/Kairos/AppModel.swift	1	if let resume { engine.resumeStrict(resume) }	ResumesStrict in Relaunch
+apps/desktop/Sources/KairosCore/Tempo.swift	1	holdsStrict = true	holds' = TRUE in Relaunch
+apps/desktop/Sources/KairosCore/Tempo.swift	1	if waitsAfterBreak, finished.isBreak {	Halt("BreakOver") in TimeUp
+apps/desktop/Sources/Kairos/AppModel.swift	1	case .stopped, .awaitingFocus:	mode' = "off" in Halt, for BreakOver as for Stop

@@ -27,12 +27,18 @@ enum Snapshot {
             log.append("\(name).png \(Int(px.width))x\(Int(px.height))" + (focus.map { " focus=\($0)" } ?? ""))
         }
 
-        func dock(_ name: String, pointer: DockGeometry.Slot? = nil, offset: Double = 0, reveal: Double = 1) {
-            let frame = DockFrame(data: model.data)
+        func dock(_ name: String, pointer: DockGeometry.Slot? = nil, offset: Double = 0, reveal: Double = 1,
+                  reduceMotion: Bool = false, surface: DockSurface = .material, launching: String? = nil) {
+            let frame = DockFrame(data: model.data, running: model.openApps, reduceMotion: reduceMotion)
             let rest = frame.geometry.layout(pointer: nil).items
             let p = pointer.flatMap { slot in rest.first { $0.slot == slot }?.center }.map { $0 + offset }
-            shot("dock-\(name)", DockStage(tracker: DockTracker(frame: frame, pointer: p, reveal: reveal),
-                                           autoHide: model.data.settings.autoHideBar).environment(\.dockGlass, false))
+            let light = surface == .lightGlassStandIn
+            let tracker = DockTracker(frame: frame, pointer: p, reveal: reveal)
+            if let launching { tracker.launches.start(launching, now: Date()) }
+            shot("dock-\(name)", DockStage(tracker: tracker,
+                                           autoHide: model.data.settings.autoHideBar, light: light)
+                .environment(\.dockSurface, surface)
+                .environment(\.colorScheme, light ? .light : (NSApp.appearance?.name == .aqua ? .light : .dark)))
         }
 
         let work = model.data.groups[0]
@@ -82,6 +88,21 @@ enum Snapshot {
         model.data.settings.dockEdge = .left
         model.data.groups.removeLast(5)
         model.data.focus.currentTaskId = current
+        // Open apps: running dots, and an app that is not in the group after a separator.
+        model.showRunningForSnapshot(["com.apple.Safari", "com.apple.Notes", "com.hnc.Discord"])
+        dock("left-36-running")
+        dock("left-36-running-light-glass", surface: .lightGlassStandIn)
+        model.data.settings.dockEdge = .bottom
+        dock("bottom-36-running-light-glass", surface: .lightGlassStandIn)
+        model.data.settings.dockEdge = .left
+        dock("left-36-hover-trash", pointer: .folder(.trash))
+        dock("left-36-launching", launching: "com.apple.iCal")
+        // Reduce motion: no magnification under the pointer, and auto-hide fades instead of sliding.
+        dock("left-36-hover-app-reduce-motion", pointer: .app("com.apple.Safari"), reduceMotion: true)
+        model.data.settings.autoHideBar = true
+        dock("left-36-autohide-sliding-reduce-motion", reveal: 0.5, reduceMotion: true)
+        model.data.settings.autoHideBar = false
+        model.showRunningForSnapshot([])
 
         for page in Page.allCases {
             model.page = page
@@ -89,6 +110,31 @@ enum Snapshot {
             shot("main-\(page.rawValue.lowercased())", size: CGSize(width: 1000, height: 660), MainWindow())
             shot("main-\(page.rawValue.lowercased())-min", size: CGSize(width: 860, height: 560), MainWindow())
         }
+        // Every Settings section at once, tall enough that nothing scrolls.
+        model.page = .settings
+        shot("main-settings-full", size: CGSize(width: 1000, height: 3000), MainWindow())
+        model.hotkeyFailures = ["⌥Space"]
+        shot("main-settings-hotkey-taken", size: CGSize(width: 1000, height: 660), MainWindow())
+        model.hotkeyFailures = []
+        model.page = .today
+        model.setMode(.focus)
+        shot("main-today-focus", size: CGSize(width: 1000, height: 660), MainWindow())
+        dock("left-36-focus-no-shield", pointer: .group(work.id))
+        model.setMode(.off)
+        // A focus phase 10 minutes in, then a break that ran out with the timer waiting.
+        let preset = model.data.preset(named: work.tempoPreset)
+        var running = TempoEngine(preset: preset)
+        running.start(.focus, now: model.now.addingTimeInterval(-600))
+        model.showTimerForSnapshot(running)
+        shot("main-today-timer", size: CGSize(width: 1000, height: 660), MainWindow())
+        var waiting = TempoEngine(preset: preset)
+        waiting.start(.shortBreak, now: model.now.addingTimeInterval(-Double(preset.shortBreakMin * 60) - 1))
+        waiting.tick(now: model.now, startsFocusAfterBreak: false)
+        model.showTimerForSnapshot(waiting)
+        model.setMode(.off) // apply(.awaitingFocus) turns the mode off
+        shot("main-today-break-over", size: CGSize(width: 1000, height: 660), MainWindow())
+        model.showTimerForSnapshot(TempoEngine(preset: preset))
+        model.setMode(.off)
         let added = model.addGroup()
         model.page = .groups
         model.selectedGroupId = added
@@ -105,12 +151,22 @@ enum Snapshot {
         model.notice = BlockNotice(kind: .app(bundleId: "com.hnc.Discord"), title: "Discord is hidden",
                                    detail: "Discord is blocked in Work.")
         shot("overlay-block", size: CGSize(width: 900, height: 600), OverlayView().background(Wallpaper()))
+        shot("overlay-block-reason-typed", size: CGSize(width: 900, height: 600), OverlayView(reason: "Need the API docs").background(Wallpaper()))
         let allowed = model.data.settings.maxOverridesPerSession
         model.data.settings.maxOverridesPerSession = 0 // overrides used up: no "Allow"
         shot("overlay-block-no-overrides", size: CGSize(width: 900, height: 600), OverlayView().background(Wallpaper()))
         model.data.settings.maxOverridesPerSession = allowed
         model.notice = BlockNotice(kind: .rest, title: "Short break", detail: "Step away from the screen.")
         shot("overlay-rest", size: CGSize(width: 900, height: 600), OverlayView().background(Wallpaper()))
+
+        let confirm = StrictConfirmation(minutes: 50, endsAt: Date().addingTimeInterval(50 * 60))
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = confirm.title
+        alert.informativeText = confirm.message
+        alert.addButton(withTitle: "Start Strict Focus")
+        alert.addButton(withTitle: "Cancel")
+        log.append(renderAlert(alert, to: dir.appendingPathComponent("alert-strict-confirm.png")))
 
         try? (log.joined(separator: "\n") + "\n").write(to: dir.appendingPathComponent("index.txt"), atomically: true, encoding: .utf8)
         print(log.joined(separator: "\n"))
@@ -170,6 +226,35 @@ enum Snapshot {
         return (CGSize(width: rep.pixelsWide, height: rep.pixelsHigh), focus)
     }
 
+    /// An NSAlert as the app shows it, laid out but never run.
+    private static func renderAlert(_ alert: NSAlert, to url: URL) -> String {
+        alert.window.appearance = NSApp.appearance
+        alert.layout()
+        guard let view = alert.window.contentView, let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else {
+            return "\(url.lastPathComponent) failed"
+        }
+        alert.window.setFrameOrigin(NSPoint(x: -30000, y: -30000))
+        alert.window.orderFront(nil)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.2))
+        view.cacheDisplay(in: view.bounds, to: rep)
+        alert.window.orderOut(nil)
+        let image = NSImage(size: view.bounds.size)
+        image.addRepresentation(rep)
+        let out = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: rep.pixelsWide, pixelsHigh: rep.pixelsHigh, bitsPerSample: 8,
+                                   samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
+        out.size = view.bounds.size
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: out)
+        alert.window.appearance?.performAsCurrentDrawingAppearance {
+            NSColor.windowBackgroundColor.setFill()
+            view.bounds.fill()
+        }
+        image.draw(in: view.bounds)
+        NSGraphicsContext.restoreGraphicsState()
+        try? out.representation(using: .png, properties: [:])?.write(to: url)
+        return "\(url.lastPathComponent) \(rep.pixelsWide)x\(rep.pixelsHigh)"
+    }
+
     private static func sample() -> AppData {
         var d = AppData.starter()
         d.onboarded = true
@@ -223,9 +308,14 @@ private final class SnapshotWindow: NSWindow {
 
 /// A stand-in desktop so translucent surfaces have something to sit on.
 private struct Wallpaper: View {
+    var light = false
+
     var body: some View {
-        LinearGradient(colors: [Color(red: 0.25, green: 0.35, blue: 0.55), Color(red: 0.75, green: 0.55, blue: 0.45)],
-                       startPoint: .topLeading, endPoint: .bottomTrailing)
+        light
+            ? LinearGradient(colors: [Color(red: 0.93, green: 0.94, blue: 0.97), Color(red: 0.98, green: 0.93, blue: 0.86)],
+                             startPoint: .topLeading, endPoint: .bottomTrailing)
+            : LinearGradient(colors: [Color(red: 0.25, green: 0.35, blue: 0.55), Color(red: 0.75, green: 0.55, blue: 0.45)],
+                             startPoint: .topLeading, endPoint: .bottomTrailing)
     }
 }
 
@@ -235,6 +325,7 @@ private struct Wallpaper: View {
 private struct DockStage: View {
     @ObservedObject var tracker: DockTracker
     var autoHide = false
+    var light = false
 
     var body: some View {
         let f = tracker.frame, g = f.geometry
@@ -259,6 +350,6 @@ private struct DockStage: View {
         }
         .border(Color.red.opacity(0.8), width: 1)
         .padding(24)
-        .background(Wallpaper())
+        .background(Wallpaper(light: light))
     }
 }
