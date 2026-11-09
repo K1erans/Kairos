@@ -6,6 +6,7 @@ import { EMPTY_STATE, hostnameOf, matchesAny, sanitizeState, siteVerdict } from 
 import { BLOCKED_MESSAGE, createPlayer } from "./lib/player.js";
 import { buildPlaylist, clampRate, positionKey, rememberPosition, resumeIndex } from "./lib/sentences.js";
 import { looksLikeHtmlDocument, unwrapHtml } from "./lib/importmap.js";
+import { saveScene, scenesFor } from "./lib/scenes.js";
 
 const VERSION = chrome.runtime.getManifest().version;
 const CONTENT_FILES = ["vendor/Readability.js", "vendor/Readability-readerable.js", "lib/textindex.js", "lib/extract.js", "content.js"];
@@ -121,8 +122,12 @@ const player = createPlayer({
   changed: () => broadcast(),
 });
 
-const ready = Promise.all([chrome.storage.local.get(["settings", "queue"]), chrome.storage.session.get("session")])
+const ready = Promise.all([chrome.storage.local.get(["settings", "queue"]), chrome.storage.session.get(["session", "sceneJob"])])
   .then(([local, sess]) => {
+    if (sess.sceneJob) {
+      // A build that was running died with the worker: its request is gone.
+      sceneJob = sess.sceneJob.status === "running" ? { ...sess.sceneJob, status: "error", error: INTERRUPTED_MESSAGE } : sess.sceneJob;
+    }
     settings = { ...DEFAULT_SETTINGS, ...(local.settings || {}) };
     queue = Array.isArray(local.queue) ? local.queue : [];
     player.setSettings(settings);
@@ -193,6 +198,7 @@ function snapshot() {
     queue,
     connected,
     connection: describeConnection(connected, problem),
+    sceneJob,
     mode: appState.mode,
   };
 }
@@ -446,19 +452,62 @@ function checkedScene(reply) {
   return html;
 }
 
-async function sceneGenerate(subject) {
-  if (!connected) throw new Error(NO_APP_MESSAGE);
-  const article = await articleForScenes();
-  const reply = await sceneRequest({ type: "scene.generate", title: article.title, text: article.text, subject, url: article.url }, 600000);
-  return { url: article.url, html: checkedScene(reply) };
+// A build runs here, not in the side panel, so closing the panel does not lose it. The finished
+// scene is saved against its article; the panel finds the job in its snapshot when it reopens.
+// Kairos Desktop has no way to abandon a build, so Cancel only stops waiting for it.
+const INTERRUPTED_MESSAGE = "The scene build was interrupted when the browser stopped Kairos Read in the background. Build it again.";
+let sceneJob = null; // {id, kind, subject, url, startedAt, status: "running"|"done"|"error", error, sceneId, instruction?}
+let jobSeq = 0;
+
+function setJob(next) {
+  sceneJob = next;
+  chrome.storage.session.set({ sceneJob }).catch(() => {});
+  broadcast();
 }
 
-async function sceneEdit(html, instruction, url) {
+const jobIsRunning = () => !!sceneJob && sceneJob.status === "running";
+
+function startJob(fields) {
+  if (jobIsRunning()) throw new Error("A 3D scene is already being built. Wait for it or cancel it first.");
   if (!connected) throw new Error(NO_APP_MESSAGE);
-  const refusal = offMacRefusal(url); // the scene was made from the article at this url
-  if (refusal) throw new Error(refusalMessage(refusal));
-  const reply = await sceneRequest({ type: "scene.edit", html, instruction }, 600000);
-  return { html: checkedScene(reply) };
+  const job = { id: `${Date.now().toString(36)}-${(++jobSeq).toString(36)}`, url: "", sceneId: "", error: "", ...fields, startedAt: Date.now(), status: "running" };
+  setJob(job);
+  runJob(job).catch(() => {});
+  return snapshot();
+}
+
+/** Applies a change to the job only if it is still the running one (not cancelled or replaced). */
+function updateJob(job, changes) {
+  if (!sceneJob || sceneJob.id !== job.id || sceneJob.status !== "running") return false;
+  setJob({ ...sceneJob, ...changes });
+  return true;
+}
+
+async function runJob(job) {
+  try {
+    let url = job.url;
+    let reply;
+    let sceneId = job.sceneId;
+    if (job.kind === "generate") {
+      const article = await articleForScenes();
+      url = article.url;
+      if (!updateJob(job, { url })) return;
+      reply = await sceneRequest({ type: "scene.generate", title: article.title, text: article.text, subject: job.subject, url }, 600000);
+      sceneId = `${Date.now().toString(36)}`;
+    } else {
+      const refusal = offMacRefusal(url); // the scene was made from the article at this url
+      if (refusal) throw new Error(refusalMessage(refusal));
+      const stored = (await scenesFor(chrome.storage.local, url)).find((s) => s.id === sceneId);
+      if (!stored) throw new Error("That scene is no longer saved, so it cannot be changed.");
+      reply = await sceneRequest({ type: "scene.edit", html: stored.html, instruction: job.instruction }, 600000);
+    }
+    const html = checkedScene(reply);
+    if (!sceneJob || sceneJob.id !== job.id || sceneJob.status !== "running") return;
+    await saveScene(chrome.storage.local, url, { id: sceneId, subject: job.subject, html });
+    updateJob(job, { status: "done", sceneId });
+  } catch (err) {
+    updateJob(job, { status: "error", error: err && err.message ? err.message : String(err) });
+  }
 }
 
 // ---- events -----------------------------------------------------------------------------------
@@ -577,10 +626,22 @@ async function handle(msg) {
       return snapshot();
     case "scene.candidates":
       return sceneCandidates();
-    case "scene.generate":
-      return sceneGenerate(msg.subject);
-    case "scene.edit":
-      return sceneEdit(msg.html, msg.instruction, msg.url);
+    case "scene.build": {
+      const subject = String(msg.subject || "").trim();
+      if (!subject) throw new Error("Choose something to build.");
+      return startJob({ kind: "generate", subject });
+    }
+    case "scene.change": {
+      const instruction = String(msg.instruction || "").trim();
+      if (!instruction) throw new Error("Say what to change.");
+      return startJob({ kind: "edit", subject: String(msg.subject || "Scene"), url: String(msg.url || ""), sceneId: String(msg.id || ""), instruction });
+    }
+    case "scene.cancel":
+      if (jobIsRunning()) setJob(null);
+      return snapshot();
+    case "scene.ack":
+      if (sceneJob && sceneJob.id === msg.id && sceneJob.status !== "running") setJob(null);
+      return snapshot();
     case "page.url": {
       const session = player.session();
       const tab = await activeTab();

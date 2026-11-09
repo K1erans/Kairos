@@ -2,6 +2,7 @@ import { positionKey } from "./lib/sentences.js";
 import { sceneFileName } from "./lib/importmap.js";
 import { CLOUD_VOICE, CLOUD_MAX_RATE, CLOUD_MIN_RATE } from "./lib/player.js";
 import { deleteScene as removeScene, saveScene as storeScene, scenesFor } from "./lib/scenes.js";
+import { mountScene, sceneTabUrl } from "./lib/sceneframe.js";
 
 const $ = (id) => document.getElementById(id);
 const send = (msg) => chrome.runtime.sendMessage(msg).catch((err) => ({ error: String(err && err.message) }));
@@ -47,8 +48,8 @@ function render(next) {
   $("highlight").value = player.highlight;
   $("readToMe").checked = player.readToMe;
   renderQueue();
-  if (!busy) $("sceneNote").textContent = !player.connected ? "3D scenes need Kairos Desktop." : isPrivate() ? PRIVATE_NOTE : "";
-  $("visualise").disabled = !player.connected || isPrivate() || busy;
+  updateSceneNote();
+  renderJob();
   if (urlChanged) loadSaved();
   // Narration sync: tell the open scene which sentence is being spoken.
   if (player.playing && player.sentence && player.sentence !== lastSentence) {
@@ -161,26 +162,34 @@ $("readToMe").addEventListener("change", (e) => send({ type: "settings.set", rea
 
 // ---- 3D scenes ------------------------------------------------------------------------------
 
-let busy = false;
+let busy = false; // a build is running (in the service worker) or candidates are being looked up
+let looking = false; // candidates are being looked up
 let frame = null; // the sandbox iframe
 let scene = null; // {id, subject, html, url}
-let vendor = null; // packaged three.js sources, fetched once
+let sceneMessage = "";
+let shownJob = ""; // the finished job this panel has already opened
+let elapsedTimer = null;
 
-function setBusy(value, note) {
-  busy = value;
-  $("visualise").disabled = value || !(player && player.connected);
-  for (const el of document.querySelectorAll("#candidates button, #changeForm button")) el.disabled = value;
-  if (note !== undefined) $("sceneNote").textContent = note;
+/** Connection and privacy come first; otherwise the last thing the build flow had to say. */
+function updateSceneNote() {
+  $("sceneNote").textContent = !player || !player.connected ? "3D scenes need Kairos Desktop." : isPrivate() ? PRIVATE_NOTE : sceneMessage;
 }
 
-async function loadVendor() {
-  if (!vendor) {
-    const [three, orbit] = await Promise.all(
-      ["vendor/three.module.js", "vendor/OrbitControls.js"].map((path) => fetch(chrome.runtime.getURL(path)).then((r) => r.text())),
-    );
-    vendor = { three, orbit };
-  }
-  return vendor;
+function setSceneMessage(text) {
+  sceneMessage = text;
+  updateSceneNote();
+}
+
+function setBusy(value, note) {
+  looking = value;
+  applyBusy();
+  if (note !== undefined) setSceneMessage(note);
+}
+
+function applyBusy() {
+  busy = looking || !!(player && player.sceneJob && player.sceneJob.status === "running");
+  $("visualise").disabled = busy || !(player && player.connected) || isPrivate();
+  for (const el of document.querySelectorAll("#candidates button, #changeForm button")) el.disabled = busy;
 }
 
 function postToScene(message) {
@@ -189,22 +198,8 @@ function postToScene(message) {
 
 async function showScene(next) {
   scene = next;
-  const sources = await loadVendor();
-  const holder = $("sceneFrame");
-  holder.textContent = "";
-  // A new iframe per scene: the sandbox page replaces its own document when it loads one.
-  const iframe = document.createElement("iframe");
-  iframe.title = `3D scene: ${next.subject}`;
-  iframe.src = chrome.runtime.getURL("sandbox.html");
-  const onReady = (event) => {
-    if (event.source !== iframe.contentWindow || !event.data || event.data.type !== "kairos:ready") return;
-    window.removeEventListener("message", onReady);
-    iframe.contentWindow.postMessage({ type: "kairos:load", html: next.html, three: sources.three, orbit: sources.orbit }, "*");
-  };
-  window.addEventListener("message", onReady);
-  holder.append(iframe);
-  frame = iframe;
   $("sceneWrap").hidden = false;
+  frame = await mountScene($("sceneFrame"), next);
 }
 
 function closeScene() {
@@ -248,6 +243,7 @@ async function loadSaved() {
     li.append(grow, rowButton("Open", what, () => showScene({ ...entry, url })), rowButton("Delete", what, () => deleteScene(url, entry.id)));
     list.append(li);
   }
+  return saved;
 }
 
 function renderCandidates(result) {
@@ -269,17 +265,54 @@ function renderCandidates(result) {
   }
 }
 
-async function generate(subject) {
-  setBusy(true, `Building “${subject}”. This can take a few minutes…`);
-  const result = await send({ type: "scene.generate", subject });
-  if (!result || result.error) {
-    setBusy(false, (result && result.error) || "Could not build the scene.");
+const clock = (ms) => {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
+};
+
+function progressText(job) {
+  const what = job.kind === "edit" ? "Changing the scene" : `Building “${job.subject}”`;
+  return `${what}… ${clock(Date.now() - job.startedAt)} so far. This can take a few minutes, and you can close this panel: it finishes in the background.`;
+}
+
+/** Follows the build the service worker is running: progress while it runs, the scene when it is done. */
+function renderJob() {
+  const job = player.sceneJob;
+  const running = !!job && job.status === "running";
+  $("sceneProgress").hidden = !running;
+  applyBusy();
+  clearInterval(elapsedTimer);
+  elapsedTimer = null;
+  if (running) {
+    const tick = () => { $("sceneProgressText").textContent = progressText(job); };
+    tick();
+    elapsedTimer = setInterval(tick, 1000);
     return;
   }
-  const entry = { id: `${Date.now().toString(36)}`, subject, html: result.html, url: result.url };
-  await saveScene(entry);
-  await showScene(entry);
-  setBusy(false, "");
+  if (!job || shownJob === job.id) return;
+  shownJob = job.id;
+  send({ type: "scene.ack", id: job.id });
+  if (job.status === "error") {
+    setSceneMessage(job.error || "Could not build the scene.");
+    return;
+  }
+  setSceneMessage("");
+  openFinished(job);
+}
+
+async function openFinished(job) {
+  const entry = (await scenesFor(chrome.storage.local, job.url)).find((s) => s.id === job.sceneId);
+  if (!entry) return;
+  await showScene({ ...entry, url: job.url });
+  $("change").value = "";
+  loadSaved();
+}
+
+async function generate(subject) {
+  setSceneMessage("");
+  const reply = await send({ type: "scene.build", subject });
+  if (reply && reply.error) setSceneMessage(reply.error);
+  else render(reply);
 }
 
 $("visualise").addEventListener("click", async () => {
@@ -293,21 +326,20 @@ $("visualise").addEventListener("click", async () => {
   setBusy(false, result.candidates.length ? "" : "Nothing in this article stood out as a 3D subject.");
 });
 
+$("cancelBuild").addEventListener("click", async () => {
+  const reply = await send({ type: "scene.cancel" });
+  setSceneMessage("Stopped waiting. Kairos Desktop may still finish the scene on its side.");
+  if (reply) render(reply);
+});
+
 $("changeForm").addEventListener("submit", async (e) => {
   e.preventDefault();
   const instruction = $("change").value.trim();
   if (!instruction || !scene || busy) return;
-  setBusy(true, "Changing the scene…");
-  const result = await send({ type: "scene.edit", html: scene.html, instruction, url: scene.url });
-  if (!result || result.error) {
-    setBusy(false, (result && result.error) || "Could not change the scene.");
-    return;
-  }
-  const entry = { ...scene, html: result.html };
-  await saveScene(entry);
-  await showScene(entry);
-  $("change").value = "";
-  setBusy(false, "");
+  setSceneMessage("");
+  const reply = await send({ type: "scene.change", url: scene.url, id: scene.id, subject: scene.subject, instruction });
+  if (reply && reply.error) setSceneMessage(reply.error);
+  else render(reply);
 });
 
 $("export").addEventListener("click", () => {
@@ -319,6 +351,9 @@ $("export").addEventListener("click", () => {
   a.download = sceneFileName(scene.subject);
   a.click();
   setTimeout(() => URL.revokeObjectURL(url), 10000);
+});
+$("openTab").addEventListener("click", () => {
+  if (scene) chrome.tabs.create({ url: sceneTabUrl(scene) });
 });
 $("closeScene").addEventListener("click", closeScene);
 

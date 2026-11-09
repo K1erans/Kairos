@@ -85,9 +85,14 @@ test("Read to me never starts the cloud voice on a listed page", async (t) => {
 test("3D scenes are refused for a listed page without sending anything", async (t) => {
   const { h } = await reading(LISTED, ["mail.example"]);
   t.after(() => h.dispose());
-  for (const msg of [{ type: "scene.candidates" }, { type: "scene.generate", subject: "Engine" }, { type: "scene.edit", html: "<html></html>", instruction: "bigger", url: LISTED }]) {
-    const reply = await h.send(msg);
-    assert.match(reply.error, /never-analyse/i, msg.type);
+  assert.match((await h.send({ type: "scene.candidates" })).error, /never-analyse/i);
+  for (const msg of [{ type: "scene.build", subject: "Engine" }, { type: "scene.change", url: LISTED, id: "s1", instruction: "bigger" }]) {
+    await h.send(msg);
+    await tick(20);
+    const job = (await h.send({ type: "player.get" })).sceneJob;
+    assert.equal(job.status, "error", msg.type);
+    assert.match(job.error, /never-analyse/i, msg.type);
+    await h.send({ type: "scene.ack", id: job.id });
   }
   assert.deepEqual(offMac(h), []);
 });
@@ -96,7 +101,8 @@ test("scene requests carry the page url", async (t) => {
   const { h } = await reading(OPEN, ["mail.example"]);
   t.after(() => h.dispose());
   await h.send({ type: "scene.candidates" });
-  await h.send({ type: "scene.generate", subject: "Engine" });
+  await h.send({ type: "scene.build", subject: "Engine" });
+  await tick(20);
   assert.deepEqual(h.toApp.filter((m) => m.type === "scene.candidates" || m.type === "scene.generate").map((m) => m.url), [OPEN, OPEN]);
 });
 

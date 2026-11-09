@@ -30,7 +30,11 @@ li .grow { flex: 1; min-width: 0; }
 li .name { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 li .why { display: block; color: var(--muted); font-size: 12px; }
 li button { padding: 3px 9px; flex: 0 0 auto; }
-#sceneFrame iframe { width: 100%; height: 340px; border: 1px solid var(--line); border-radius: 8px; margin-top: 10px; display: block; background: #11141c; }
+#sceneFrame { height: 60vh; min-height: 380px; max-height: 95vh; margin-top: 10px; resize: vertical; overflow: hidden; border: 1px solid var(--line); border-radius: 8px; background: #11141c; }
+#sceneFrame iframe { width: 100%; height: 100%; border: 0; display: block; }
+.progress { align-items: center; }
+.progress > span { flex: 1 1 auto; color: var(--status); }
+.progress > button { flex: 0 0 auto; }
 button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 [hidden] { display: none !important; }
 @media (prefers-reduced-motion: reduce) {

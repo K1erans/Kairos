@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Kairos scene</title>
+    <style>
+      :root { color-scheme: dark; }
+      html, body { height: 100%; margin: 0; background: #11141c; color: #dfe2ea; font: 13px -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif; }
+      body { display: flex; flex-direction: column; }
+      header { display: flex; align-items: center; gap: 12px; padding: 8px 14px; border-bottom: 1px solid #2a2f3c; }
+      h1 { font-size: 14px; margin: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      button { font: inherit; padding: 5px 12px; border-radius: 7px; border: 1px solid #3a4050; background: #2a2f3c; color: #dfe2ea; cursor: pointer; }
+      button:focus-visible { outline: 2px solid #4f7cff; outline-offset: 2px; }
+      #stage { flex: 1; min-height: 0; }
+      #stage iframe { width: 100%; height: 100%; border: 0; display: block; }
+      #note { padding: 24px; color: #f0b778; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1 id="title">Kairos scene</h1>
+      <button id="export" hidden>Export HTML</button>
+    </header>
+    <div id="stage"><p id="note">Loading the scene…</p></div>
+    <script type="module" src="scene.js"></script>
+  </body>
+</html>

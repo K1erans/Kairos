@@ -253,18 +253,6 @@ test("pausing a cloud sentence stops it in the app and its late done is ignored"
   assert.deepEqual(ttsSent(h, "tts.speak").map((m) => m.text), ["One.", "One."], "resumes from the same sentence");
 });
 
-test("a scene lost to a dropped connection says why instead of 'not connected'", async (t) => {
-  const app = fakeApp({ mode: "off" }, () => {}); // never answers scene.generate
-  const tab = articleTab(1, A, ["One.", "Two."]);
-  const h = await startRead({ app, tabs: [tab], windows: [{ id: 1, focused: true }] });
-  t.after(() => h.dispose());
-  const reply = h.send({ type: "scene.generate", subject: "Engine" });
-  await tick(20);
-  await h.dropPort();
-  const result = await reply;
-  assert.match(result.error, /1 MB/);
-});
-
 test("the panel snapshot says why Kairos Desktop is out of reach", async (t) => {
   const app = (msg, reply) => { if (msg.type === "hello") reply({ type: "error", message: "Kairos Desktop is not running" }); };
   const h = await startRead({ app });

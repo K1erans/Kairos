@@ -41,5 +41,9 @@ each manifest, so they are the same on every machine.
   hands it the packaged three.js sources; the page turns them into `blob:` URLs and rewrites the
   scene's import map, so scenes work offline. Its CSP is `default-src 'none'`: scene code cannot fetch,
   open sockets, load remote scripts or images, or navigate the frame away.
+- A scene build runs in Read's service worker, not the side panel: closing the panel does not lose
+  it. The finished scene is saved against its article (newest 20 kept) and shown when the panel is
+  reopened; "Open in tab" shows it full size (`read/scene.html`). Cancel only stops waiting, since
+  Kairos Desktop has no way to abandon a build.
 - When Kairos Desktop is not running, Shield keeps the last known mode (with a manual switch in the
   popup) and Read still reads; 3D scenes and Jev need the app.

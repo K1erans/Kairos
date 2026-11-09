@@ -57,8 +57,12 @@
 
     <section aria-label="3D scenes">
       <h2>3D scenes</h2>
-      <p id="sceneNote" class="status"></p>
+      <p id="sceneNote" class="status" aria-live="polite"></p>
       <button id="visualise">Visualise this article</button>
+      <div id="sceneProgress" class="row progress" hidden>
+        <span id="sceneProgressText" role="status"></span>
+        <button id="cancelBuild" title="Stop waiting for this scene" aria-label="Cancel the scene build">Cancel</button>
+      </div>
       <ul id="candidates"></ul>
       <ul id="saved"></ul>
       <div id="sceneWrap" hidden>
@@ -68,6 +72,7 @@
           <button type="submit">Change</button>
         </form>
         <div class="row">
+          <button id="openTab" title="Open this scene full size in a new tab" aria-label="Open this scene in a tab">Open in tab</button>
           <button id="export">Export HTML</button>
           <button id="closeScene">Close</button>
         </div>
