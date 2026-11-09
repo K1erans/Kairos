@@ -147,6 +147,15 @@ export function withoutElement(hiddenElements, host, selector) {
   return out;
 }
 
+/** Rules with `site` on one site list and off the other, and any temporary allow on it ended when blocking. */
+export function withSite(rules, site, list) {
+  const own = list === "block" ? "blockSites" : "allowSites";
+  const other = list === "block" ? "allowSites" : "blockSites";
+  const without = (entries) => (entries || []).filter((e) => normalizeDomain(e) !== site);
+  const temporaryAllows = Object.fromEntries(Object.entries(rules.temporaryAllows || {}).filter(([h]) => list === "allow" || normalizeDomain(h) !== site));
+  return { ...rules, [own]: [...without(rules[own]), site], [other]: without(rules[other]), temporaryAllows };
+}
+
 /** Rejects anything that could break out of the generated rule. */
 export function isSafeSelector(selector) {
   return typeof selector === "string" && selector.trim().length > 0 && selector.length < 500 && !/[{}<>;@]|\/\*/.test(selector);

@@ -15,6 +15,7 @@ import {
   pruneJevCache,
   rememberJev,
   selectorsForHost,
+  withSite,
   withoutElement,
 } from "./lib/rules.js";
 
@@ -249,6 +250,19 @@ async function addElementRule(host, selector) {
   return { ok: true };
 }
 
+async function addSiteRule(host, list) {
+  const site = normalizeDomain(host);
+  if (!site || (list !== "block" && list !== "allow")) return { ok: false, message: "That is not a site." };
+  // An allow-for-good would undo what strict mode promises: no way out until the session ends.
+  if (list === "allow" && current().mode === "strict") return { ok: false, message: "Strict mode: sites cannot be allowed until the session ends." };
+  appState = { ...appState, rules: withSite(appState.rules, site, list) };
+  if (list === "block") localAllows = Object.fromEntries(Object.entries(localAllows).filter(([h]) => normalizeDomain(h) !== site));
+  await chrome.storage.local.set({ state: appState, localAllows });
+  bridge.send({ type: "rule.addSite", site, list }, { queue: true });
+  await applyState();
+  return { ok: true, site, list };
+}
+
 async function removeElementRule(host, selector) {
   const domain = normalizeDomain(host);
   if (!domain || typeof selector !== "string") return { ok: false };
@@ -280,6 +294,8 @@ async function handle(msg, sender) {
       return goBack(sender);
     case "picker.picked":
       return addElementRule(msg.host, msg.selector);
+    case "site.add":
+      return addSiteRule(msg.host, msg.list);
     case "elements.remove":
       return removeElementRule(msg.host, msg.selector);
     case "popup.get": {
@@ -291,6 +307,8 @@ async function handle(msg, sender) {
         manualMode,
         lockedUntil: connected ? null : strictLockUntil(appState),
         host,
+        site: normalizeDomain(host),
+        verdict: siteVerdict(msg.url || "", state),
         localSelectors: host ? Object.entries(localElements).filter(([d]) => host === d || host.endsWith("." + d)).flatMap(([d, list]) => list.map((selector) => ({ host: d, selector }))) : [],
       };
     }

@@ -145,3 +145,70 @@ test("the app clearing strictUntil releases the lock after a reconnect", async (
   await h.drop();
   assert.equal((await h.send({ type: "popup.setMode", mode: "off" })).ok, true);
 });
+
+// ---- block / allow this site ------------------------------------------------------------------
+
+const BLOG = "https://www.blog.example/post";
+
+test("Block this site applies at once and tells the app", async (t) => {
+  const state = { current: focus() };
+  const h = await startShield({ app: fakeApp(() => state.current) });
+  t.after(() => h.dispose());
+  assert.equal((await h.send({ type: "page.query", url: BLOG })).verdict, "unlisted");
+  const reply = await h.send({ type: "site.add", host: "www.blog.example", list: "block" });
+  assert.deepEqual([reply.ok, reply.site], [true, "blog.example"]);
+  assert.equal((await h.send({ type: "page.query", url: BLOG })).verdict, "blocked");
+  assert.deepEqual(h.sent("rule.addSite"), [{ type: "rule.addSite", site: "blog.example", list: "block" }]);
+  assert.ok(h.dnr.rules.length > 0, "the redirect rule covers it");
+});
+
+test("Always allow moves a blocked site to the allow list", async (t) => {
+  const state = { current: focus() };
+  const h = await startShield({ app: fakeApp(() => state.current) });
+  t.after(() => h.dispose());
+  assert.equal((await h.send({ type: "page.query", url: "https://www.youtube.com/" })).verdict, "blocked");
+  await h.send({ type: "site.add", host: "youtube.com", list: "allow" });
+  assert.equal((await h.send({ type: "page.query", url: "https://www.youtube.com/" })).verdict, "allowed");
+  assert.deepEqual(h.sent("rule.addSite"), [{ type: "rule.addSite", site: "youtube.com", list: "allow" }]);
+});
+
+test("blocking a site ends a temporary allow on it", async (t) => {
+  const state = { current: focus() };
+  const h = await startShield({ app: fakeApp(() => state.current) });
+  t.after(() => h.dispose());
+  await h.push(focus({ rules: { temporaryAllows: { "blog.example": Date.now() + 60_000 } } }));
+  assert.equal((await h.send({ type: "page.query", url: BLOG })).verdict, "allowed");
+  await h.send({ type: "site.add", host: "blog.example", list: "block" });
+  assert.equal((await h.send({ type: "page.query", url: BLOG })).verdict, "blocked");
+});
+
+test("a site chosen while the app is away is sent when it returns", async (t) => {
+  const state = { current: focus() };
+  const h = await startShield({ app: fakeApp(() => state.current) });
+  t.after(() => h.dispose());
+  await h.drop();
+  await h.send({ type: "site.add", host: "blog.example", list: "block" });
+  assert.equal(h.sent("rule.addSite").length, 0);
+  assert.equal((await h.send({ type: "page.query", url: BLOG })).verdict, "blocked", "enforced meanwhile");
+  await h.reconnect(fakeApp(() => state.current));
+  assert.deepEqual(h.sent("rule.addSite"), [{ type: "rule.addSite", site: "blog.example", list: "block" }]);
+});
+
+test("strict mode does not let a site be allowed for good", async (t) => {
+  const state = { current: focus({ mode: "strict" }) };
+  const h = await startShield({ app: fakeApp(() => state.current) });
+  t.after(() => h.dispose());
+  const reply = await h.send({ type: "site.add", host: "youtube.com", list: "allow" });
+  assert.equal(reply.ok, false);
+  assert.match(reply.message, /strict/i);
+  assert.equal(h.sent("rule.addSite").length, 0);
+  assert.equal((await h.send({ type: "site.add", host: "blog.example", list: "block" })).ok, true, "blocking more is fine");
+});
+
+test("a bad host or list is refused", async (t) => {
+  const h = await startShield({ app: fakeApp(() => focus()) });
+  t.after(() => h.dispose());
+  assert.equal((await h.send({ type: "site.add", host: "", list: "block" })).ok, false);
+  assert.equal((await h.send({ type: "site.add", host: "blog.example", list: "both" })).ok, false);
+  assert.equal(h.sent("rule.addSite").length, 0);
+});

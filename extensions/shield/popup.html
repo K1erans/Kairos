@@ -19,6 +19,9 @@
       li { display: flex; align-items: center; gap: 6px; padding: 3px 0; }
       li code { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
       li button { width: auto; margin: 0; padding: 2px 8px; }
+      .pair { display: flex; gap: 8px; }
+      .pair button { margin-top: 0; }
+      .note { color: GrayText; min-height: 16px; margin-top: 6px; font-size: 12px; }
       [hidden] { display: none !important; }
     </style>
   </head>
@@ -41,6 +44,14 @@
     <div class="row"><span>Time left</span><span id="time"></span></div>
     <div class="row"><span>Overrides left</span><span id="overrides"></span></div>
     <div class="row"><span>Kairos Desktop</span><span id="bridge"></span></div>
+    <div id="siteBox" hidden>
+      <h2 id="siteName"></h2>
+      <div class="pair">
+        <button id="blockSite">Block this site</button>
+        <button id="allowSite">Always allow this site</button>
+      </div>
+      <div class="note" id="siteNote" aria-live="polite"></div>
+    </div>
     <button id="pick">Hide an element on this page</button>
     <div id="rules" hidden>
       <h2>Hidden on this site</h2>

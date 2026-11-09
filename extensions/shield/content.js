@@ -155,6 +155,7 @@
           <div>
             <button class="primary back"></button>
             <button class="quiet allow">Allow 5 min</button>
+            <button class="quiet always">Always allow this site</button>
           </div>
           <form>
             <input type="text" maxlength="200" placeholder="Why do you need this page?" aria-label="Reason" />
@@ -168,6 +169,7 @@
     const time = root.querySelector(".time");
     const note = root.querySelector(".note");
     const allow = root.querySelector(".allow");
+    const always = root.querySelector(".always");
     const form = root.querySelector("form");
     const input = root.querySelector("input");
     const tick = () => {
@@ -177,6 +179,7 @@
     tick();
     // Rebuilt from the latest page info whenever the state changes while the overlay is up.
     const update = () => {
+      always.hidden = info.mode === "strict"; // an allow-for-good is not a way out of strict
       allow.disabled = !info.canOverride;
       if (info.canOverride) {
         if (/overrides/.test(note.textContent)) note.textContent = "";
@@ -187,6 +190,12 @@
     };
     update();
     root.querySelector(".back").addEventListener("click", () => ask({ type: "goBack" }));
+    always.addEventListener("click", async () => {
+      note.textContent = "Saving…";
+      const result = await ask({ type: "site.add", host: location.hostname, list: "allow" });
+      if (result && result.ok) removeOverlay();
+      else note.textContent = (result && result.message) || "Could not save that.";
+    });
     allow.addEventListener("click", () => {
       form.style.display = "block";
       input.focus();

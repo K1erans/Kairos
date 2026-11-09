@@ -31,6 +31,11 @@ function render() {
     const at = new Date(locked).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
     $("lockNote").textContent = `Locked in Strict until ${at}. The mode cannot be changed here until then, even while Kairos Desktop is away.`;
   }
+  const site = data.site;
+  $("siteBox").hidden = !(tab && /^https?:\/\//i.test(tab.url || "")) || !site;
+  $("siteName").textContent = site ? `${site}: ${{ blocked: "blocked", allowed: "allowed", unlisted: "not on a list", off: "no site rules in this mode" }[data.verdict] || ""}` : "";
+  $("allowSite").disabled = state.mode === "strict";
+  $("allowSite").title = state.mode === "strict" ? "Strict mode: sites cannot be allowed until the session ends." : "";
   const pickable = !!(tab && /^https?:\/\//i.test(tab.url || ""));
   $("pick").disabled = !pickable;
   const list = $("list");
@@ -56,6 +61,14 @@ $("manual").addEventListener("change", async (e) => {
   await chrome.runtime.sendMessage({ type: "popup.setMode", mode: e.target.value });
   load();
 });
+
+for (const [id, list] of [["blockSite", "block"], ["allowSite", "allow"]]) {
+  $(id).addEventListener("click", async () => {
+    const result = await chrome.runtime.sendMessage({ type: "site.add", host: data.site, list }).catch(() => null);
+    $("siteNote").textContent = result && result.ok ? `${result.site} ${list === "block" ? "is now blocked" : "is now always allowed"}.` : (result && result.message) || "Could not save that.";
+    load();
+  });
+}
 
 $("pick").addEventListener("click", async () => {
   if (!tab || !tab.id) return;
