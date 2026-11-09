@@ -5,12 +5,23 @@ import KairosCore
 import SwiftUI
 
 /// `Kairos --snapshot <dir>` renders every view to PNG files instead of launching the app.
+/// `Kairos --install-bridge` points the browsers' native messaging manifests at this copy's host
+/// and exits (scripts/build-app.sh --install runs it).
 @main
 enum Entry {
     @MainActor static func main() {
         let args = CommandLine.arguments
         if let i = args.firstIndex(of: "--snapshot") {
             Snapshot.run(into: URL(fileURLWithPath: i + 1 < args.count ? args[i + 1] : "snapshots"))
+        } else if args.contains("--install-bridge") {
+            let browsers = BridgeInstaller.install()
+            if DataStore.isScratch {
+                print("KAIROS_HOME is set, so the real browser manifests were left alone.")
+            } else {
+                print(browsers.isEmpty ? "No Chromium browser profile found; nothing to point at \(BridgeInstaller.hostPath)."
+                                       : "Kairos Shield and Kairos Read now reach \(BridgeInstaller.hostPath) in: \(browsers.joined(separator: ", ")).")
+            }
+            exit(0)
         } else if handOffToRunningCopy() {
             exit(0)
         } else {
