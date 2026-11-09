@@ -236,3 +236,25 @@ test("an override granted while the app is away lasts the length the app last re
   assert.equal(reply.allowed, true);
   assert.ok(Math.abs(reply.until - (before + 10 * 60_000)) < 5000, `until ${reply.until - before}`);
 });
+
+// ---- connection messages ----------------------------------------------------------------------
+
+test("the popup says Kairos Desktop is not running when the host reports it", async (t) => {
+  const app = (msg, reply) => { if (msg.type === "hello") reply({ type: "error", message: "Kairos Desktop is not running" }); };
+  const h = await startShield({ app });
+  t.after(() => h.dispose());
+  await h.drop();
+  const popup = await h.send({ type: "popup.get", url: BLOG });
+  assert.equal(popup.connected, false);
+  assert.match(popup.connection.text, /not running/);
+  assert.match(popup.connection.hint, /Open Kairos Desktop/);
+});
+
+test("the popup says the bridge is not installed when Chrome cannot find the host", async (t) => {
+  const h = await startShield({ app: fakeApp(() => focus()) });
+  t.after(() => h.dispose());
+  globalThis.chrome.runtime.lastError = { message: "Specified native messaging host not found." };
+  await h.drop();
+  globalThis.chrome.runtime.lastError = undefined;
+  assert.match((await h.send({ type: "popup.get", url: BLOG })).connection.text, /bridge is not installed/);
+});

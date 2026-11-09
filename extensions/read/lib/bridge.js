@@ -6,18 +6,41 @@ export const HOST_NAME = "com.kairos.host";
 export const OUTBOX_LIMIT = 50;
 
 /**
+ * Why the app is not reachable: "app-not-running" (the native host started but Kairos Desktop is
+ * not listening), "bridge-missing" (Chrome cannot find or use the native host: the Kairos bridge
+ * is not installed), "retrying" (a working connection was lost), or null (connected, or not yet tried).
+ * @typedef {"app-not-running"|"bridge-missing"|"retrying"|null} Problem
+ */
+
+/** What to tell the user, and what to do about it. */
+export function describeConnection(connected, problem) {
+  if (connected) return { text: "Connected", hint: "" };
+  switch (problem) {
+    case "app-not-running":
+      return { text: "Kairos Desktop is not running.", hint: "Open Kairos Desktop and this will reconnect by itself." };
+    case "bridge-missing":
+      return { text: "The Kairos bridge is not installed.", hint: "In Kairos Desktop open Settings, then Chrome bridge, and choose Install bridge. Then reload this extension." };
+    case "retrying":
+      return { text: "Disconnected from Kairos Desktop, retrying.", hint: "If it does not come back, check that Kairos Desktop is running." };
+    default:
+      return { text: "Connecting to Kairos Desktop…", hint: "" };
+  }
+}
+
+/**
  * @param {object} opts
  * @param {"shield"|"read"} opts.client
  * @param {string} opts.version
  * @param {(msg: object) => void} [opts.onMessage] pushes that are not replies to a pending request
  * @param {(connected: boolean) => void} [opts.onStatus]
+ * @param {(problem: Problem) => void} [opts.onProblem] why the app is not reachable, when that changes
  * @param {(outbox: object[]) => void} [opts.onOutbox] called when the queue of unsent messages changes,
  *        so a caller can persist it across service worker restarts
  * @param {() => {onMessage: any, onDisconnect: any, postMessage: Function, disconnect: Function}} [opts.connect]
  *        injectable for tests; defaults to chrome.runtime.connectNative
  */
 export function createBridge(opts) {
-  const { client, version, onMessage, onStatus, onOutbox } = opts;
+  const { client, version, onMessage, onStatus, onOutbox, onProblem } = opts;
   const connect = opts.connect || (() => chrome.runtime.connectNative(HOST_NAME));
   const setTimer = opts.setTimeout || ((fn, ms) => setTimeout(fn, ms));
   const pending = new Map(); // id -> {resolve, reject, timer}
@@ -28,6 +51,8 @@ export function createBridge(opts) {
   let seq = 0;
   let retryTimer = null;
   let outbox = []; // messages sent with {queue: true} while the app was away
+  let problem = null;
+  let hostSaidNotRunning = false; // the host's id-less error just before it exits
 
   function setConnected(value) {
     if (connected === value) return;
@@ -57,8 +82,20 @@ export function createBridge(opts) {
     }
   }
 
+  function setProblem(next) {
+    if (problem === next) return;
+    problem = next;
+    if (onProblem) onProblem(next);
+  }
+
   function handleDisconnect(detail) {
     port = null;
+    const wasConnected = connected;
+    if (hostSaidNotRunning) setProblem("app-not-running");
+    else if (/not found|forbidden/i.test(detail || "")) setProblem("bridge-missing");
+    else if (wasConnected) setProblem("retrying");
+    else setProblem(problem || "retrying");
+    hostSaidNotRunning = false;
     setConnected(false);
     failPending(detail ? `Kairos Desktop is not connected (${detail})` : "Kairos Desktop is not connected", "disconnected");
     if (stopped) return;
@@ -70,8 +107,12 @@ export function createBridge(opts) {
     if (!msg || typeof msg !== "object") return;
     // The host says "Kairos Desktop is not running" with an id-less error just before it exits;
     // anything else proves the host reached the app.
-    if (msg.type === "error" && !msg.id) return;
+    if (msg.type === "error" && !msg.id) {
+      if (/not running/i.test(msg.message || "")) hostSaidNotRunning = true;
+      return;
+    }
     backoff = 1000;
+    setProblem(null);
     setConnected(true);
     if (msg.id && pending.has(msg.id)) {
       const p = pending.get(msg.id);
@@ -161,5 +202,5 @@ export function createBridge(opts) {
     failPending("Bridge stopped");
   }
 
-  return { start, stop, send, request, isConnected: () => connected };
+  return { start, stop, send, request, isConnected: () => connected, problem: () => problem };
 }

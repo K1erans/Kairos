@@ -11,6 +11,12 @@ async function load() {
   render();
 }
 
+function jevStatus(state, connected) {
+  if (!connected) return "Needs Kairos Desktop";
+  if (state.mode !== "focus" && state.mode !== "strict") return "Off in this mode";
+  return state.rules.jevEnabled ? "On" : "Off in settings";
+}
+
 function render() {
   if (!data) return;
   const { state, connected, manualMode } = data;
@@ -20,8 +26,11 @@ function render() {
   $("task").textContent = state.currentTask ? state.currentTask.title : "None";
   $("time").textContent = formatTimeLeft(state.endsAt) || "–";
   $("overrides").textContent = state.mode === "focus" && connected ? String(state.overridesLeft) : "–";
+  $("groupRow").textContent = state.groupName || "None";
+  $("jev").textContent = jevStatus(state, connected);
   $("bridge").textContent = connected ? "Connected" : "Not connected";
   $("warn").hidden = connected;
+  $("warn").textContent = `${data.connection.text} ${data.connection.hint} Shield is using the last known mode.`;
   $("manualRow").hidden = connected;
   $("manual").value = manualMode || "";
   const locked = typeof data.lockedUntil === "number" ? data.lockedUntil : null;

@@ -29,6 +29,8 @@ function render(next) {
   $("title").textContent = player.loaded ? player.title : "Kairos Read";
   $("title").title = player.loaded ? player.url : "";
   $("status").textContent = player.notice || "";
+  $("bridge").hidden = player.connected;
+  $("bridge").textContent = `${player.connection.text} ${player.connection.hint} Reading works without it; cloud voices and 3D scenes need it.`;
   $("sentence").textContent = player.loaded ? player.sentence : "Open an article and press play, or right-click a link and choose “Read this link”.";
   $("toggle").textContent = player.playing ? "⏸" : "▶";
   $("toggle").setAttribute("aria-label", player.playing ? "Pause" : "Play");
@@ -44,7 +46,7 @@ function render(next) {
   $("highlight").value = player.highlight;
   $("readToMe").checked = player.readToMe;
   renderQueue();
-  if (!busy) $("sceneNote").textContent = !player.connected ? "Kairos Desktop is needed for 3D scenes. Reading works without it." : isPrivate() ? PRIVATE_NOTE : "";
+  if (!busy) $("sceneNote").textContent = !player.connected ? "3D scenes need Kairos Desktop." : isPrivate() ? PRIVATE_NOTE : "";
   $("visualise").disabled = !player.connected || isPrivate() || busy;
   if (urlChanged) loadSaved();
   // Narration sync: tell the open scene which sentence is being spoken.

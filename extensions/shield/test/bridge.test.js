@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createBridge } from "../lib/bridge.js";
+import { createBridge, describeConnection } from "../lib/bridge.js";
 
 function fakePort() {
   const listeners = { message: [], disconnect: [] };
@@ -123,4 +123,75 @@ test("the host's 'Kairos Desktop is not running' notice does not count as connec
   assert.equal(bridge.isConnected(), false);
   assert.deepEqual(status, []);
   bridge.stop();
+});
+
+// ---- why the app is not reachable -------------------------------------------------------------
+
+function problemBridge({ detail = "" } = {}) {
+  const ports = [];
+  const problems = [];
+  let fire = null;
+  globalThis.chrome = { runtime: { get lastError() { return detail ? { message: detail } : undefined; } } };
+  const bridge = createBridge({
+    client: "shield",
+    version: "1",
+    connect: () => { const p = fakePort(); ports.push(p); return p; },
+    setTimeout: (fn, ms) => { if (ms >= 1000) { fire = fn; return 0; } return setTimeout(fn, ms); },
+    onProblem: (p) => problems.push(p),
+  });
+  bridge.start();
+  return { bridge, ports, problems, retry: () => fire() };
+}
+
+test("the host saying Kairos Desktop is not running is reported as that, not as a lost connection", () => {
+  const { bridge, ports, problems } = problemBridge({ detail: "Native host has exited." });
+  ports[0].receive({ type: "error", message: "Kairos Desktop is not running" });
+  ports[0].drop();
+  assert.equal(bridge.problem(), "app-not-running");
+  assert.deepEqual(problems, ["app-not-running"]);
+  bridge.stop();
+});
+
+test("a missing native host is reported as the bridge not being installed", () => {
+  const { bridge, ports } = problemBridge({ detail: "Specified native messaging host not found." });
+  ports[0].drop();
+  assert.equal(bridge.problem(), "bridge-missing");
+  bridge.stop();
+  const forbidden = problemBridge({ detail: "Access to the specified native messaging host is forbidden." });
+  forbidden.ports[0].drop();
+  assert.equal(forbidden.bridge.problem(), "bridge-missing");
+  forbidden.bridge.stop();
+});
+
+test("losing a connection that was working is 'retrying'; reconnecting clears the problem", () => {
+  const { bridge, ports, problems, retry } = problemBridge({ detail: "Native host has exited." });
+  ports[0].receive({ type: "state", state: {} });
+  assert.equal(bridge.problem(), null);
+  ports[0].drop();
+  assert.equal(bridge.problem(), "retrying");
+  retry();
+  ports[1].receive({ type: "state", state: {} });
+  assert.equal(bridge.problem(), null);
+  assert.deepEqual(problems, ["retrying", null]);
+  bridge.stop();
+});
+
+test("an earlier 'not running' notice does not stick to a later, different failure", () => {
+  const { bridge, ports, retry } = problemBridge({ detail: "Native host has exited." });
+  ports[0].receive({ type: "error", message: "Kairos Desktop is not running" });
+  ports[0].drop();
+  retry();
+  ports[1].receive({ type: "state", state: {} });
+  ports[1].drop();
+  assert.equal(bridge.problem(), "retrying");
+  bridge.stop();
+});
+
+test("describeConnection tells the user what to do for each problem", () => {
+  assert.match(describeConnection(false, "app-not-running").text, /not running/);
+  assert.match(describeConnection(false, "app-not-running").hint, /Open Kairos Desktop/);
+  assert.match(describeConnection(false, "bridge-missing").text, /bridge is not installed/);
+  assert.match(describeConnection(false, "bridge-missing").hint, /Install bridge/);
+  assert.match(describeConnection(false, "retrying").text, /retrying/);
+  assert.equal(describeConnection(true, null).text, "Connected");
 });

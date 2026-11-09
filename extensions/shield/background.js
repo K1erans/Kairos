@@ -1,6 +1,6 @@
 // Kairos Shield service worker: holds the focus state, turns it into blocking rules,
 // and relays Jev checks and overrides to Kairos Desktop.
-import { createBridge } from "./lib/bridge.js";
+import { createBridge, describeConnection } from "./lib/bridge.js";
 import { EMPTY_STATE, hostnameOf, normalizeDomain, sanitizeState, siteVerdict, strictLockUntil } from "./lib/match.js";
 import {
   JEV_TIMEOUT_MS,
@@ -28,6 +28,7 @@ let manualMode = null; // used only while the app is disconnected
 let localAllows = {}; // hostname -> expiry, set when an override is granted
 let localElements = {}; // hostname -> [selectors] picked in this browser
 let connected = false;
+let problem = null; // why the app is not reachable; see describeConnection
 
 // The worker is restarted often; everything it needs is reloaded from storage first.
 const ready = chrome.storage.local
@@ -61,6 +62,10 @@ const bridge = createBridge({
   onStatus: (value) => {
     connected = value;
     ready.then(applyState);
+  },
+  onProblem: (value) => {
+    problem = value;
+    ready.then(() => updateBadge(current()));
   },
   onOutbox: (outbox) => chrome.storage.local.set({ outbox }),
 });
@@ -119,7 +124,7 @@ function updateBadge(state) {
   if (!connected) {
     chrome.action.setBadgeText({ text: "!" });
     chrome.action.setBadgeBackgroundColor({ color: "#D97706" });
-    chrome.action.setTitle({ title: "Kairos Shield: Kairos Desktop is not running. Using the last known mode." });
+    chrome.action.setTitle({ title: `Kairos Shield: ${describeConnection(false, problem).text} Using the last known mode.` });
     return;
   }
   const label = { focus: "F", strict: "S", break: "B", off: "" }[state.mode] || "";
@@ -304,6 +309,7 @@ async function handle(msg, sender) {
       return {
         state,
         connected,
+        connection: describeConnection(connected, problem),
         manualMode,
         lockedUntil: connected ? null : strictLockUntil(appState),
         host,

@@ -264,3 +264,13 @@ test("a scene lost to a dropped connection says why instead of 'not connected'",
   const result = await reply;
   assert.match(result.error, /1 MB/);
 });
+
+test("the panel snapshot says why Kairos Desktop is out of reach", async (t) => {
+  const app = (msg, reply) => { if (msg.type === "hello") reply({ type: "error", message: "Kairos Desktop is not running" }); };
+  const h = await startRead({ app });
+  t.after(() => h.dispose());
+  await h.dropPort();
+  const p = await h.send({ type: "player.get" });
+  assert.equal(p.connected, false);
+  assert.match(p.connection.text, /not running/);
+});

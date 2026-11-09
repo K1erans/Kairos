@@ -19,6 +19,7 @@
       li { display: flex; align-items: center; gap: 6px; padding: 3px 0; }
       li code { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
       li button { width: auto; margin: 0; padding: 2px 8px; }
+      .hint { color: GrayText; font-size: 12px; margin: 2px 0 6px; }
       .pair { display: flex; gap: 8px; }
       .pair button { margin-top: 0; }
       .note { color: GrayText; min-height: 16px; margin-top: 6px; font-size: 12px; }
@@ -27,7 +28,8 @@
   </head>
   <body>
     <h1><span class="dot" id="dot"></span><span id="group">Kairos Shield</span></h1>
-    <div class="warn" id="warn" hidden>Kairos Desktop is not running. Shield is using the last known mode; app blocking is off.</div>
+    <div class="warn" id="warn" hidden></div>
+    <div class="row"><span>Group</span><span id="groupRow"></span></div>
     <div class="row"><span>Mode</span><span id="mode"></span></div>
     <div class="row" id="manualRow" hidden>
       <span>Set mode</span>
@@ -43,6 +45,8 @@
     <div class="row"><span>Task</span><span id="task"></span></div>
     <div class="row"><span>Time left</span><span id="time"></span></div>
     <div class="row"><span>Overrides left</span><span id="overrides"></span></div>
+    <div class="row"><span>Jev</span><span id="jev"></span></div>
+    <p class="hint">Jev is Kairos Desktop's page checker: it judges pages that are on no list against your task.</p>
     <div class="row"><span>Kairos Desktop</span><span id="bridge"></span></div>
     <div id="siteBox" hidden>
       <h2 id="siteName"></h2>
@@ -57,6 +61,8 @@
       <h2>Hidden on this site</h2>
       <ul id="list"></ul>
     </div>
+    <p class="hint">Switch group in the Kairos Bar.</p>
+    <p class="hint">Private windows: rules do not apply there unless you allow Kairos Shield in them. Open the extensions page, choose Details on Kairos Shield and turn on &ldquo;Allow in Incognito&rdquo; (&ldquo;Allow in Private&rdquo; in Brave). Jev never reads private windows.</p>
     <script type="module" src="popup.js"></script>
   </body>
 </html>

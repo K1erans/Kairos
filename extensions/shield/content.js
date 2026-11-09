@@ -138,6 +138,7 @@
         .card { max-width: 440px; padding: 32px; text-align: center; }
         h1 { font-size: 22px; font-weight: 600; margin: 0 0 8px; }
         p { margin: 0 0 20px; color: #b6bac6; }
+        .why { font-size: 13px; margin-bottom: 8px; }
         .time { font-variant-numeric: tabular-nums; color: #f4f5f7; }
         button { font: inherit; border: 0; border-radius: 8px; padding: 10px 18px; cursor: pointer; margin: 4px; }
         .primary { background: #4f7cff; color: #fff; }
@@ -151,6 +152,7 @@
       <div class="wrap" role="dialog" aria-modal="true" aria-label="Kairos Shield">
         <div class="card">
           <h1>This page looks like a distraction</h1>
+          <p class="why">Jev, Kairos's page checker, judged it against your task.</p>
           <p>You are working on <strong class="task"></strong><span class="time"></span></p>
           <div>
             <button class="primary back"></button>
@@ -253,7 +255,7 @@
       "all:initial;position:fixed;z-index:2147483646;pointer-events:none;border:2px solid #4f7cff;" +
       "background:rgba(79,124,255,.18);border-radius:3px;display:none";
     const tip = document.createElement("div");
-    tip.textContent = "Click an element to hide it. Esc to cancel.";
+    tip.textContent = "Hide an element on this page: click it. Esc cancels.";
     tip.style.cssText =
       "all:initial;position:fixed;left:50%;top:16px;transform:translateX(-50%);z-index:2147483647;" +
       "pointer-events:none;background:#11141c;color:#fff;padding:8px 14px;border-radius:8px;" +
@@ -283,7 +285,7 @@
         return;
       }
       const result = await ask({ type: "picker.picked", host: location.hostname, selector });
-      toast(result && result.ok ? "Hidden. Manage hidden elements in the Kairos Shield popup." : "Could not save that rule.");
+      toast(result && result.ok ? "Hidden. To bring it back, use “Hidden on this site” in the Kairos Shield popup." : "Could not save that rule.");
     };
     const key = (e) => {
       if (e.key === "Escape") {

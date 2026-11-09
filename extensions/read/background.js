@@ -1,7 +1,7 @@
 // Kairos Read service worker: wires the player (lib/player.js) to chrome.tts, the Kairos Desktop
 // bridge, the tabs being read, the read-later queue, context menus and shortcuts, and relays 3D
 // scene requests to Kairos Desktop.
-import { createBridge } from "./lib/bridge.js";
+import { createBridge, describeConnection } from "./lib/bridge.js";
 import { EMPTY_STATE, hostnameOf, matchesAny, sanitizeState, siteVerdict } from "./lib/match.js";
 import { BLOCKED_MESSAGE, createPlayer } from "./lib/player.js";
 import { buildPlaylist, clampRate, positionKey, rememberPosition, resumeIndex } from "./lib/sentences.js";
@@ -22,6 +22,7 @@ const SCENE_DROPPED_MESSAGE =
 let appState = sanitizeState(EMPTY_STATE);
 let haveState = false; // the app has sent its settings (and so its never-analyse list) on this connection
 let connected = false;
+let problem = null; // why the app is not reachable; see describeConnection
 let settings = { ...DEFAULT_SETTINGS };
 let queue = []; // [{url, title}]
 
@@ -146,6 +147,10 @@ const bridge = createBridge({
       }
     });
   },
+  onProblem: (value) => {
+    problem = value;
+    ready.then(broadcast);
+  },
   onStatus: (value) => {
     connected = value;
     if (!value) {
@@ -187,6 +192,7 @@ function snapshot() {
     highlight: settings.highlight,
     queue,
     connected,
+    connection: describeConnection(connected, problem),
     mode: appState.mode,
   };
 }
