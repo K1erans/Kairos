@@ -22,7 +22,7 @@ export function clampCloudRate(rate) {
 /**
  * A speech backend speaks one sentence and reports exactly one outcome through onDone:
  * {type: "end"}, {type: "interrupted"} (cut off by something else) or {type: "error", message}.
- * @typedef {{speak(text: string, opts: {rate: number, voice?: string}, onDone: (e: object) => void): void, stop(): void, prefetch?(text: string): void}} Speech
+ * @typedef {{speak(text: string, opts: {rate: number, voice?: string, url?: string}, onDone: (e: object) => void): void, stop(): void, prefetch?(text: string, url?: string): void}} Speech
  *
  * @param {object} deps
  * @param {Speech} deps.local chrome.tts
@@ -35,6 +35,7 @@ export function clampCloudRate(rate) {
  * @param {(session: object) => void} deps.savePosition
  * @param {(on: boolean) => void} deps.keepAlive
  * @param {(url: string) => boolean} deps.isBlocked
+ * @param {(url: string) => boolean} deps.isPrivate the page's content must not leave the Mac (never-analyse, or the list is not known)
  * @param {() => object|null} deps.nextQueued the first read-later entry, left in place
  * @param {(entry: object) => Promise<object>} deps.fetchArticle a session for a queued entry; throws on failure
  * @param {(entry: object) => void} deps.dequeue removes an entry once its article loaded
@@ -89,7 +90,7 @@ export function createPlayer(deps) {
   // ---- speech --------------------------------------------------------------------------------
 
   function cloudInUse() {
-    return settings.voice === CLOUD_VOICE && !!cloudVoice && !cloudFailed;
+    return settings.voice === CLOUD_VOICE && !!cloudVoice && !cloudFailed && !(session && deps.isPrivate(session.url));
   }
 
   function stopSpeech() {
@@ -113,9 +114,9 @@ export function createPlayer(deps) {
     deps.changed();
     if (cloudInUse()) {
       speaking = deps.cloud;
-      deps.cloud.speak(item.text, { rate: clampCloudRate(settings.rate) }, (e) => outcome(mine, true, e));
+      deps.cloud.speak(item.text, { rate: clampCloudRate(settings.rate), url: session.url }, (e) => outcome(mine, true, e));
       const next = session.items[session.index + 1];
-      if (next && deps.cloud.prefetch) deps.cloud.prefetch(next.text);
+      if (next && deps.cloud.prefetch) deps.cloud.prefetch(next.text, session.url);
     } else {
       speaking = deps.local;
       const voice = settings.voice === CLOUD_VOICE ? "" : settings.voice;
@@ -267,6 +268,12 @@ export function createPlayer(deps) {
     else deps.changed();
   }
 
+  /** The never-analyse list changed: a cloud sentence in flight for a page now on it is stopped and spoken again by the Mac voice. */
+  function recheckPrivacy() {
+    if (status === "playing" && speaking === deps.cloud && !cloudInUse()) speakCurrent();
+    else deps.changed();
+  }
+
   function setCloudVoice(voice) {
     cloudVoice = voice || null;
     if (!cloudVoice && speaking === deps.cloud && status === "playing") fallBack("Kairos Desktop is not offering it");
@@ -309,6 +316,7 @@ export function createPlayer(deps) {
     finish,
     setSettings,
     setCloudVoice,
+    recheckPrivacy,
     /** Called by the keep-alive timer: logs listening time in slices so a long article is not lost. */
     tick: () => status === "playing" && flushLog(true),
     /** After Kairos Desktop (re)connects it needs to hear the current state again. */

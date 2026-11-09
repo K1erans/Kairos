@@ -2,7 +2,7 @@
 // bridge, the tabs being read, the read-later queue, context menus and shortcuts, and relays 3D
 // scene requests to Kairos Desktop.
 import { createBridge } from "./lib/bridge.js";
-import { EMPTY_STATE, sanitizeState, siteVerdict } from "./lib/match.js";
+import { EMPTY_STATE, hostnameOf, matchesAny, sanitizeState, siteVerdict } from "./lib/match.js";
 import { BLOCKED_MESSAGE, createPlayer } from "./lib/player.js";
 import { buildPlaylist, clampRate, positionKey, rememberPosition, resumeIndex } from "./lib/sentences.js";
 import { looksLikeHtmlDocument, unwrapHtml } from "./lib/importmap.js";
@@ -14,10 +14,13 @@ const KEEPALIVE_MS = 20000;
 const CLOUD_SENTENCE_TIMEOUT_MS = 5 * 60 * 1000;
 const MAX_PAGE_BYTES = 5 * 1024 * 1024;
 const NO_APP_MESSAGE = "Kairos Desktop is needed for 3D scenes. Open it and try again.";
+const NEVER_ANALYSE_MESSAGE = "This site is on your never-analyse list in Kairos Desktop, so Kairos Read does not send it anywhere. It reads it with the Mac voice and cannot build a 3D scene of it.";
+const NO_SETTINGS_MESSAGE = "Kairos Desktop has not sent its settings yet, so Kairos Read cannot tell whether this page may leave your Mac. Try again in a moment.";
 const SCENE_DROPPED_MESSAGE =
   "The connection to Kairos Desktop dropped while the scene was being sent. Chrome cannot take a message over 1 MB from an app, so a very detailed scene can do this: ask for a simpler one.";
 
 let appState = sanitizeState(EMPTY_STATE);
+let haveState = false; // the app has sent its settings (and so its never-analyse list) on this connection
 let connected = false;
 let settings = { ...DEFAULT_SETTINGS };
 let queue = []; // [{url, title}]
@@ -52,13 +55,13 @@ const localSpeech = {
 
 // Kairos Desktop fetches and plays the cloud voice itself; tts.done arrives when a sentence ends.
 const cloudSpeech = {
-  speak(text, { rate }, onDone) {
-    bridge.request({ type: "tts.speak", text, rate }, CLOUD_SENTENCE_TIMEOUT_MS).then(
+  speak(text, { rate, url }, onDone) {
+    bridge.request({ type: "tts.speak", text, rate, url }, CLOUD_SENTENCE_TIMEOUT_MS).then(
       (reply) => onDone({ type: reply.stopped ? "interrupted" : "end" }),
       (err) => onDone({ type: "error", message: err.message }),
     );
   },
-  prefetch: (text) => bridge.send({ type: "tts.prefetch", text }),
+  prefetch: (text, url) => bridge.send({ type: "tts.prefetch", text, url }),
   stop: () => bridge.send({ type: "tts.stop" }),
 };
 
@@ -110,6 +113,7 @@ const player = createPlayer({
   savePosition,
   keepAlive: setKeepAlive,
   isBlocked,
+  isPrivate: (url) => offMacRefusal(url) !== null,
   nextQueued: () => queue[0] || null,
   fetchArticle: (entry) => articleFromLink(entry.url, entry.title),
   dequeue: (entry) => removeFromQueue(entry.url),
@@ -132,10 +136,11 @@ const bridge = createBridge({
     ready.then(() => {
       if (msg.type === "state") {
         appState = sanitizeState(msg.state);
+        haveState = true;
         player.setCloudVoice(appState.cloudVoice);
         const session = player.session();
         if (session && isBlocked(session.url)) player.stop(BLOCKED_MESSAGE);
-        else broadcast();
+        else player.recheckPrivacy();
       } else if (msg.type === "read.command") {
         runCommand(msg.command);
       }
@@ -143,7 +148,10 @@ const bridge = createBridge({
   },
   onStatus: (value) => {
     connected = value;
-    if (!value) appState = sanitizeState(EMPTY_STATE);
+    if (!value) {
+      appState = sanitizeState(EMPTY_STATE);
+      haveState = false;
+    }
     ready.then(() => {
       player.setCloudVoice(appState.cloudVoice);
       if (value) player.resendStatus();
@@ -155,9 +163,26 @@ bridge.start();
 
 chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {});
 
+/**
+ * Why this page's content may not be sent off the Mac, or null when it may. Without the app's
+ * settings there is no never-analyse list, so nothing counts as safe to send ("unknown").
+ */
+function offMacRefusal(url) {
+  if (!haveState) return "unknown";
+  const host = hostnameOf(url || "");
+  if (!host) return "unknown";
+  return matchesAny(host, appState.rules.neverAnalyse) ? "listed" : null;
+}
+
+function refusalMessage(refusal) {
+  return refusal === "listed" ? NEVER_ANALYSE_MESSAGE : NO_SETTINGS_MESSAGE;
+}
+
 function snapshot() {
+  const view = player.view();
   return {
-    ...player.view(),
+    ...view,
+    private: !!view.url && offMacRefusal(view.url) === "listed",
     readToMe: settings.readToMe,
     highlight: settings.highlight,
     queue,
@@ -387,6 +412,8 @@ async function articleForScenes() {
     await loadFromTab(await activeTab(), { autoplay: false });
   }
   const session = player.session();
+  const refusal = offMacRefusal(session.url);
+  if (refusal) throw new Error(refusalMessage(refusal));
   return { title: session.title, url: session.url, text: session.paragraphs.join("\n\n") };
 }
 
@@ -403,7 +430,7 @@ async function sceneRequest(msg, timeout) {
 async function sceneCandidates() {
   if (!connected) throw new Error(NO_APP_MESSAGE);
   const article = await articleForScenes();
-  const reply = await sceneRequest({ type: "scene.candidates", title: article.title, text: article.text }, 120000);
+  const reply = await sceneRequest({ type: "scene.candidates", title: article.title, text: article.text, url: article.url }, 120000);
   return { url: article.url, title: article.title, candidates: Array.isArray(reply.candidates) ? reply.candidates.slice(0, 3) : [] };
 }
 
@@ -416,12 +443,14 @@ function checkedScene(reply) {
 async function sceneGenerate(subject) {
   if (!connected) throw new Error(NO_APP_MESSAGE);
   const article = await articleForScenes();
-  const reply = await sceneRequest({ type: "scene.generate", title: article.title, text: article.text, subject }, 600000);
+  const reply = await sceneRequest({ type: "scene.generate", title: article.title, text: article.text, subject, url: article.url }, 600000);
   return { url: article.url, html: checkedScene(reply) };
 }
 
-async function sceneEdit(html, instruction) {
+async function sceneEdit(html, instruction, url) {
   if (!connected) throw new Error(NO_APP_MESSAGE);
+  const refusal = offMacRefusal(url); // the scene was made from the article at this url
+  if (refusal) throw new Error(refusalMessage(refusal));
   const reply = await sceneRequest({ type: "scene.edit", html, instruction }, 600000);
   return { html: checkedScene(reply) };
 }
@@ -545,11 +574,12 @@ async function handle(msg) {
     case "scene.generate":
       return sceneGenerate(msg.subject);
     case "scene.edit":
-      return sceneEdit(msg.html, msg.instruction);
+      return sceneEdit(msg.html, msg.instruction, msg.url);
     case "page.url": {
       const session = player.session();
       const tab = await activeTab();
-      return { url: session && session.source !== "selection" ? session.url : tab ? tab.url : "" };
+      const url = session && session.source !== "selection" ? session.url : tab ? tab.url : "";
+      return { url, private: !!url && offMacRefusal(url) === "listed" };
     }
     default:
       return undefined;

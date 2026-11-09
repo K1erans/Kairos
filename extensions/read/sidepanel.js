@@ -12,6 +12,8 @@ let dragging = false;
 let lastSentence = "";
 let macVoices = [];
 let voiceKey = "";
+let pagePrivate = false; // the page the panel is about is on Kairos Desktop's never-analyse list
+const PRIVATE_NOTE = "This site is on your never-analyse list in Kairos Desktop, so nothing from it is sent anywhere. 3D scenes are unavailable here.";
 
 // ---- player ---------------------------------------------------------------------------------
 
@@ -22,7 +24,7 @@ function render(next) {
     $("status").textContent = next.error;
     return;
   }
-  const urlChanged = !player || positionKey(player.url) !== positionKey(next.url);
+  const urlChanged = !player || positionKey(player.url) !== positionKey(next.url) || player.private !== next.private;
   player = next;
   $("title").textContent = player.loaded ? player.title : "Kairos Read";
   $("title").title = player.loaded ? player.url : "";
@@ -42,8 +44,8 @@ function render(next) {
   $("highlight").value = player.highlight;
   $("readToMe").checked = player.readToMe;
   renderQueue();
-  $("sceneNote").textContent = player.connected ? "" : "Kairos Desktop is needed for 3D scenes. Reading works without it.";
-  $("visualise").disabled = !player.connected || busy;
+  if (!busy) $("sceneNote").textContent = !player.connected ? "Kairos Desktop is needed for 3D scenes. Reading works without it." : isPrivate() ? PRIVATE_NOTE : "";
+  $("visualise").disabled = !player.connected || isPrivate() || busy;
   if (urlChanged) loadSaved();
   // Narration sync: tell the open scene which sentence is being spoken.
   if (player.playing && player.sentence && player.sentence !== lastSentence) {
@@ -77,15 +79,17 @@ function renderQueue() {
 }
 
 const cloudChosen = () => !!player && player.voice === CLOUD_VOICE;
+const isPrivate = () => pagePrivate || (!!player && player.loaded && player.source !== "selection" && player.private);
 
 /** The speed label; a cloud voice plays at 0.5× to 2×, so say what it will really use. */
 function renderRate(rate) {
   const value = Number(rate);
   const cloud = cloudChosen() && player.cloudVoice;
+  const priv = cloudChosen() && isPrivate();
   const used = cloud ? Math.min(CLOUD_MAX_RATE, Math.max(CLOUD_MIN_RATE, value)) : value;
   $("rateOut").textContent = used !== value ? `${value}× (${used}× with ${player.cloudVoice.name})` : `${value}×`;
-  $("rateNote").hidden = !cloud;
-  $("rateNote").textContent = cloud ? `${player.cloudVoice.name} plays at ${CLOUD_MIN_RATE}× to ${CLOUD_MAX_RATE}×.` : "";
+  $("rateNote").hidden = !cloud && !priv;
+  $("rateNote").textContent = priv ? "This site is on your never-analyse list, so it is read with the Mac voice." : cloud ? `${player.cloudVoice.name} plays at ${CLOUD_MIN_RATE}× to ${CLOUD_MAX_RATE}×.` : "";
 }
 
 function option(value, text, disabled = false) {
@@ -212,6 +216,8 @@ async function deleteScene(url, id) {
 async function loadSaved() {
   const reply = await send({ type: "page.url" });
   const url = reply && reply.url ? reply.url : "";
+  pagePrivate = !!(reply && reply.private);
+  if (player) render(player);
   const saved = url ? await scenesFor(chrome.storage.local, url) : [];
   const list = $("saved");
   list.textContent = "";
@@ -288,7 +294,7 @@ $("changeForm").addEventListener("submit", async (e) => {
   const instruction = $("change").value.trim();
   if (!instruction || !scene || busy) return;
   setBusy(true, "Changing the scene…");
-  const result = await send({ type: "scene.edit", html: scene.html, instruction });
+  const result = await send({ type: "scene.edit", html: scene.html, instruction, url: scene.url });
   if (!result || result.error) {
     setBusy(false, (result && result.error) || "Could not change the scene.");
     return;
