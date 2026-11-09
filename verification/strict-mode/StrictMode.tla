@@ -106,7 +106,7 @@ Advance(name, byUser) ==
     /\ act' = name
     /\ UNCHANGED <<holds, groupStrict>>
 
-\* TempoEngine.stop / reset, then apply(.stopped): data.focus.mode = .off
+\* TempoEngine.stop / reset, then apply(.stopped or .awaitingFocus): data.focus.mode = .off
 Halt(name, byUser) ==
     /\ preset' = PresetAfterPending /\ pending' = "none"
     /\ phase' = "idle" /\ paused' = FALSE /\ holds' = FALSE
@@ -120,8 +120,10 @@ Halt(name, byUser) ==
 Skip == phase # "idle" /\ (LocksStrictControls => ~InStrictPhase) /\ Advance("Skip", TRUE)
 Stop == phase # "idle" /\ (LocksStrictControls => ~InStrictPhase) /\ Halt("Stop", TRUE)
 
-\* AppModel.tick: the phase ran out; after a long sleep the timer stops instead
-TimeUp     == phase # "idle" /\ ~paused /\ Advance("TimeUp", FALSE)
+\* AppModel.tick: the phase ran out; after a long sleep the timer stops instead. With "Start the
+\* next focus session automatically" off, a break that runs out stops the timer to wait
+\* (TempoEngine.advance, waitsAfterBreak; apply(.awaitingFocus) turns the mode off as .stopped does).
+TimeUp     == phase # "idle" /\ ~paused /\ (Advance("TimeUp", FALSE) \/ (phase = "rest" /\ Halt("BreakOver", FALSE)))
 LongSleep  == phase # "idle" /\ ~paused /\ Halt("LongSleep", FALSE)
 
 \* AppModel.switchGroup -> TempoEngine.use

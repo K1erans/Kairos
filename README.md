@@ -65,7 +65,9 @@ Claude.
 
 - **Accessibility**: lets Jev read the front window's title, and lets Kairos switch desktops with
   Control-number. Settings > Blocking > "Read window titles" asks for it.
-- **Notifications**: for the end of a focus session or break.
+- **Notifications**: for the end of a focus session or break. When a break ends the timer waits
+  for you to start the next focus session, unless Settings > Timer > "Start the next focus session
+  automatically" is on.
 - **Open at login**: Settings > General.
 - **Use Kairos Bar instead of the macOS Dock** (Settings > Kairos Bar) hides the Dock with its own
   auto-hide settings and puts them back when turned off or when Kairos quits. While it is on, a

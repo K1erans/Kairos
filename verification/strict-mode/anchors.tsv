@@ -25,3 +25,5 @@ apps/desktop/Sources/Kairos/AppModel.swift	1	focus.strictUntil = tempo.phase == 
 apps/desktop/Sources/KairosCore/History.swift	1	if let until = focus.strictUntil, until > now {	ResumesStrict in Relaunch
 apps/desktop/Sources/Kairos/AppModel.swift	1	if let resume { engine.resumeStrict(resume) }	ResumesStrict in Relaunch
 apps/desktop/Sources/KairosCore/Tempo.swift	1	holdsStrict = true	holds' = TRUE in Relaunch
+apps/desktop/Sources/KairosCore/Tempo.swift	1	if waitsAfterBreak, finished.isBreak {	Halt("BreakOver") in TimeUp
+apps/desktop/Sources/Kairos/AppModel.swift	1	case .stopped, .awaitingFocus:	mode' = "off" in Halt, for BreakOver as for Stop

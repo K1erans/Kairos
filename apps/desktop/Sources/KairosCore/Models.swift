@@ -228,6 +228,8 @@ public struct Settings: Codable, Hashable, Sendable {
     public var autoHideBar: Bool = false
     /// Keep the macOS Dock hidden while Kairos Bar is on screen.
     public var replacesSystemDock: Bool = false
+    /// After a break runs out, start the next focus phase at once instead of waiting.
+    public var startsFocusAfterBreak: Bool = false
     /// In Focus and Strict, hide a browser that Kairos Shield is not running in.
     public var blockUnshieldedBrowsers: Bool = true
 
@@ -258,7 +260,7 @@ extension Settings: Lenient {
         .field("overrideMinutes", \.overrideMinutes), .field("breakOverlay", \.breakOverlay),
         .field("groupHotkeys", \.groupHotkeys), .field("quickAddHotkey", \.quickAddHotkey), .field("timerHotkey", \.timerHotkey), .field("voiceProvider", \.voiceProvider), .field("voiceId", \.voiceId),
         .field("autoHideBar", \.autoHideBar), .field("replacesSystemDock", \.replacesSystemDock),
-        .field("blockUnshieldedBrowsers", \.blockUnshieldedBrowsers),
+        .field("blockUnshieldedBrowsers", \.blockUnshieldedBrowsers), .field("startsFocusAfterBreak", \.startsFocusAfterBreak),
     ]
 }
 

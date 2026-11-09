@@ -97,7 +97,9 @@ struct MenuBarMenu: View {
         }
         Divider()
         if model.tempo.phase == .idle {
+            if model.tempo.awaitingFocus { Text("Break over") }
             Button("Start focus") { model.requestStartFocus() }.keyboardShortcut(model.timerShortcut)
+            if model.tempo.awaitingFocus { Button("Not now") { model.endBreakWait() } }
         } else {
             Text("\(model.tempo.phase.label) · \(clock(model.remaining))")
             Button(model.tempo.isPaused ? "Resume" : "Pause") { model.toggleTimer() }.keyboardShortcut(model.timerShortcut)

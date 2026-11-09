@@ -251,6 +251,34 @@ struct AppPicker: View {
 
 // MARK: - Today
 
+/// The timer on Today: a large countdown while a phase runs, "Break over" while the timer waits
+/// for the next focus session, and the group and mode when idle.
+struct TimerReadout: View {
+    @EnvironmentObject var model: AppModel
+
+    var body: some View {
+        if model.tempo.phase != .idle {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(alignment: .firstTextBaseline, spacing: 10) {
+                    Text(clock(model.remaining))
+                        .font(.system(size: 44, weight: .semibold, design: .rounded).monospacedDigit())
+                        .accessibilityLabel("\(model.tempo.phase.label), \(clock(model.remaining)) left")
+                    Text(model.tempo.isPaused ? "\(model.tempo.phase.label), paused" : model.tempo.phase.label)
+                        .font(.title3).foregroundStyle(.secondary)
+                }
+                ProgressView(value: model.tempo.progress(now: model.now))
+                    .tint(model.tempo.phase == .focus ? .accentColor : .green)
+                    .frame(maxWidth: 320)
+            }
+        } else if model.tempo.awaitingFocus {
+            Label("Break over. Start the next focus session when you\u{2019}re ready.", systemImage: "cup.and.saucer.fill")
+                .font(.title3)
+        } else {
+            Text("\(model.activeGroup?.name ?? "") · \(model.mode.label)").foregroundStyle(.secondary)
+        }
+    }
+}
+
 struct TodayPage: View {
     @EnvironmentObject var model: AppModel
 
@@ -272,13 +300,14 @@ struct TodayPage: View {
                         VStack(alignment: .leading, spacing: 8) {
                             Text("Current task").font(.caption).foregroundStyle(.secondary)
                             Text(model.currentTask?.title ?? "Nothing yet").font(.title2.weight(.semibold))
-                            Text(model.tempo.phase == .idle ? "\(model.activeGroup?.name ?? "") · \(model.mode.label)"
-                                : "\(model.tempo.phase.label) · \(clock(model.remaining))\(model.tempo.isPaused ? " (paused)" : "")")
-                                .foregroundStyle(.secondary)
-                                .monospacedDigit()
+                            TimerReadout()
                             HStack {
                                 Button(model.tempo.phase == .idle ? "Start focus" : (model.tempo.isPaused ? "Resume" : "Pause")) { model.toggleTimer() }
                                     .buttonStyle(.borderedProminent)
+                                if model.tempo.awaitingFocus {
+                                    Button("Not now") { model.endBreakWait() }
+                                        .help("Stop waiting. The next focus session starts a new count toward the long break.")
+                                }
                                 if model.tempo.phase != .idle {
                                     Button("Skip") { model.requestSkip() }.disabled(model.strictLocked)
                                     Button("+5 min") { model.addFiveMinutes() }
@@ -861,6 +890,11 @@ struct SettingsPage: View {
                     }
                 }
                 Toggle("Show a full-screen break reminder", isOn: $model.data.settings.breakOverlay)
+                VStack(alignment: .leading, spacing: 4) {
+                    Toggle("Start the next focus session automatically", isOn: $model.data.settings.startsFocusAfterBreak)
+                    Text("Off, the timer waits when a break ends and notifies you. Start the next session from Today, the menu bar or the timer shortcut.")
+                        .font(.callout).foregroundStyle(.secondary)
+                }
             }
             Section("Blocking") {
                 Stepper("Overrides per session: \(model.data.settings.maxOverridesPerSession)", value: $model.data.settings.maxOverridesPerSession, in: 0...10)

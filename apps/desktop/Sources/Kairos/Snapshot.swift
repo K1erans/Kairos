@@ -100,6 +100,20 @@ enum Snapshot {
         shot("main-today-focus", size: CGSize(width: 1000, height: 660), MainWindow())
         dock("left-36-focus-no-shield", pointer: .group(work.id))
         model.setMode(.off)
+        // A focus phase 10 minutes in, then a break that ran out with the timer waiting.
+        let preset = model.data.preset(named: work.tempoPreset)
+        var running = TempoEngine(preset: preset)
+        running.start(.focus, now: model.now.addingTimeInterval(-600))
+        model.showTimerForSnapshot(running)
+        shot("main-today-timer", size: CGSize(width: 1000, height: 660), MainWindow())
+        var waiting = TempoEngine(preset: preset)
+        waiting.start(.shortBreak, now: model.now.addingTimeInterval(-Double(preset.shortBreakMin * 60) - 1))
+        waiting.tick(now: model.now, startsFocusAfterBreak: false)
+        model.showTimerForSnapshot(waiting)
+        model.setMode(.off) // apply(.awaitingFocus) turns the mode off
+        shot("main-today-break-over", size: CGSize(width: 1000, height: 660), MainWindow())
+        model.showTimerForSnapshot(TempoEngine(preset: preset))
+        model.setMode(.off)
         let added = model.addGroup()
         model.page = .groups
         model.selectedGroupId = added

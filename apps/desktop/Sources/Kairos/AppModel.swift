@@ -231,9 +231,8 @@ final class AppModel: ObservableObject {
     }
 
     var menuTitle: String {
-        let name = currentTask?.title ?? activeGroup?.name ?? "Kairos"
-        let short = name.count > 28 ? String(name.prefix(27)) + "…" : name
-        return tempo.phase == .idle ? short : "\(short) · \(clock(remaining))"
+        MenuBarTitle.make(name: currentTask?.title ?? activeGroup?.name ?? "Kairos", phase: tempo.phase,
+                          remaining: remaining, awaitingFocus: tempo.awaitingFocus)
     }
 
     func tasks(in groupId: UUID?, done: Bool = false) -> [TaskItem] {
@@ -446,9 +445,18 @@ final class AppModel: ObservableObject {
     func stopTimer() { if !strictLocked { apply(tempo.stop(now: Date())) } }
     func addFiveMinutes() { tempo.extend(minutes: 5, now: Date()); syncFocusFromTempo() }
 
+    func endBreakWait() { tempo.endWait() }
+
+    /// The snapshot tool shows a running or waiting timer without waiting for one. Never called
+    /// by the running app, so it is no step in StrictMode.tla.
+    func showTimerForSnapshot(_ engine: TempoEngine) {
+        tempo = engine
+        syncFocusFromTempo()
+    }
+
     private func tick() {
         now = Date()
-        let events = tempo.tick(now: now)
+        let events = tempo.tick(now: now, startsFocusAfterBreak: data.settings.startsFocusAfterBreak)
         if !events.isEmpty { apply(events) }
         // A paused strict phase would end later the longer it waits, so its saved end moves on.
         if tempo.isPaused, strictLocked, let until = data.focus.strictUntil,
@@ -466,7 +474,10 @@ final class AppModel: ObservableObject {
                 if phase == .focus, completed {
                     notify("Focus session done", body: currentTask.map { "Done with \u{201C}\($0.title)\u{201D}? Time for a break." } ?? "Time for a break.")
                 } else if phase.isBreak, completed {
-                    notify("Break over", body: currentTask.map { "Back to \u{201C}\($0.title)\u{201D}." } ?? "Ready for the next session.")
+                    let body = tempo.awaitingFocus
+                        ? currentTask.map { "Start \u{201C}\($0.title)\u{201D} when you\u{2019}re ready." } ?? "Start the next focus session when you\u{2019}re ready."
+                        : currentTask.map { "Back to \u{201C}\($0.title)\u{201D}." } ?? "Ready for the next session."
+                    notify("Break over", body: body)
                 }
             case let .started(phase):
                 if phase == .focus {
@@ -475,7 +486,7 @@ final class AppModel: ObservableObject {
                 } else if data.settings.breakOverlay {
                     notice = BlockNotice(kind: .rest, title: phase.label, detail: "Step away from the screen.")
                 }
-            case .stopped:
+            case .stopped, .awaitingFocus:
                 notice = nil
                 data.focus.mode = .off
             }
