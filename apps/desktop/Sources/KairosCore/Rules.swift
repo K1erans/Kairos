@@ -64,6 +64,9 @@ public struct OverrideLedger: Codable, Equatable, Sendable {
 
     public func active(now: Date) -> [String: Date] { allows.filter { $0.value > now } }
 
+    /// When the next live grant runs out, so the app can re-check and re-push state then.
+    public func nextExpiry(after now: Date) -> Date? { allows.values.filter { $0 > now }.min() }
+
     /// Called when a new focus session starts.
     public mutating func reset() { used = 0; allows = [:] }
 }

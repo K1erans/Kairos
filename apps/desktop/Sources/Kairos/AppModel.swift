@@ -60,6 +60,10 @@ final class AppModel: ObservableObject {
     private var lastPushed = Data()
     private var hiddenBySwitch: [UUID: [String]] = [:]
     private var observers: [NSObjectProtocol] = []
+    private var grantTimer: Timer?
+    /// The app guard hides apps only in the running app, never in the snapshot tool or a
+    /// scratch copy (bridge-check), which would otherwise hide the owner's real apps.
+    private var guardsApps = false
 
     /// `readKeys: false` skips the Keychain, so the snapshot tool never triggers an access prompt.
     init(store: DataStore = .standard(), readKeys: Bool = true) {
@@ -74,6 +78,7 @@ final class AppModel: ObservableObject {
     // MARK: Lifecycle
 
     func start() {
+        guardsApps = !DataStore.isScratch
         bridge.onMessage = { [weak self] client, message in
             Task { @MainActor in self?.handle(message, from: client) }
         }
@@ -269,6 +274,7 @@ final class AppModel: ObservableObject {
         data.focus = focus
         tempo.use(data.preset(named: next.tempoPreset))
         if next.desktop > 0 { AppDelegate.shared?.switchDesktop(next.desktop) }
+        sweepSoon()
 
         guard data.settings.switchBehavior == .hide else { return }
         let apps = NSWorkspace.shared.runningApplications.filter { $0.activationPolicy == .regular }
@@ -295,6 +301,7 @@ final class AppModel: ObservableObject {
         // Entering Strict also clears grants, so an "Allow 5 min" made in Focus cannot carry over.
         if (new.blocks && !old.blocks) || (new == .strict && old != .strict) { ledger.reset() }
         if !new.blocks, case .app = notice?.kind { notice = nil }
+        if new.blocks && !old.blocks { sweepSoon() }
     }
 
     @discardableResult
@@ -414,23 +421,17 @@ final class AppModel: ObservableObject {
 
     // MARK: App guard
 
-    private static let neverGuard: Set<String> = [
-        "com.apple.finder", "com.apple.dock", "com.apple.systempreferences", "com.apple.loginwindow",
-        "com.apple.Spotlight", "com.apple.controlcenter", "com.apple.notificationcenterui", "com.apple.SecurityAgent",
-        "com.apple.Terminal", "com.apple.ActivityMonitor",
-    ]
-
     private func appActivated(_ app: NSRunningApplication) {
-        guard mode.blocks, let group = activeGroup, let bid = app.bundleIdentifier,
-              bid != Bundle.main.bundleIdentifier, !Self.neverGuard.contains(bid),
-              !ledger.isAllowed(bid, now: Date()) else { return }
+        guard guardsApps, mode.blocks, let group = activeGroup, let bid = app.bundleIdentifier else { return }
+        let now = Date()
         let name = app.localizedName ?? bid
-        if group.blockedApps.contains(bid) {
+        if AppGuard.blocks(bid, mode: mode, group: group, isAllowed: { self.ledger.isAllowed($0, now: now) }, own: Bundle.main.bundleIdentifier) {
             block(app, name: name, layer: "app", detail: "\(name) is blocked in \(group.name).")
             return
         }
         // Jev judges apps that are on no list. Apps in the group's dock are trusted.
-        guard group.jevEnabled, hasJevKey, !group.dockApps.contains(bid), let task = currentTask else { return }
+        guard group.jevEnabled, hasJevKey, !group.dockApps.contains(bid), bid != Bundle.main.bundleIdentifier,
+              !AppGuard.neverGuard.contains(bid), !ledger.isAllowed(bid, now: now), let task = currentTask else { return }
         var subject = JevClient.Subject(kind: "app")
         subject.app = name
         subject.title = Apps.frontWindowTitle(pid: app.processIdentifier) ?? ""
@@ -454,6 +455,29 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// Activation alone misses apps that are already open, so blocking starting, a group switch
+    /// and an "Allow" running out each check every visible app, and the frontmost one with Jev.
+    private func sweepSoon() {
+        // After the change that triggered it has landed in `data`.
+        DispatchQueue.main.async { [weak self] in self?.sweep() }
+    }
+
+    private func sweep() {
+        guard guardsApps, mode.blocks, let group = activeGroup else { return }
+        let now = Date()
+        let apps = NSWorkspace.shared.runningApplications.filter { $0.activationPolicy == .regular }
+        let hide = AppGuard.sweep(apps.compactMap { a in a.bundleIdentifier.map { AppGuard.App(bundleId: $0, visible: !a.isHidden) } },
+                                  mode: mode, group: group, isAllowed: { self.ledger.isAllowed($0, now: now) }, own: Bundle.main.bundleIdentifier)
+        let front = NSWorkspace.shared.frontmostApplication
+        // The frontmost app goes last, so the overlay names the app the owner was looking at.
+        for bid in hide.filter({ $0 != front?.bundleIdentifier }) + hide.filter({ $0 == front?.bundleIdentifier }) {
+            guard let app = apps.first(where: { $0.bundleIdentifier == bid }) else { continue }
+            let name = app.localizedName ?? bid
+            block(app, name: name, layer: "app", detail: "\(name) is blocked in \(group.name).")
+        }
+        if let front, let bid = front.bundleIdentifier, !hide.contains(bid) { appActivated(front) }
+    }
+
     private func block(_ app: NSRunningApplication, name: String, layer: String, detail: String) {
         guard let bid = app.bundleIdentifier else { return }
         let strict = mode == .strict
@@ -462,6 +486,21 @@ final class AppModel: ObservableObject {
         data.logBlock(BlockEvent(groupId: data.focus.activeGroupId, target: bid, label: name, layer: layer))
         notice = BlockNotice(kind: .app(bundleId: bid), title: strict ? "\(name) was quit" : "\(name) is hidden",
                              detail: detail, screen: screen)
+    }
+
+    /// An "Allow" running out changes `temporaryAllows` and may leave a blocked app on screen.
+    private func scheduleGrantExpiry() {
+        grantTimer?.invalidate()
+        grantTimer = nil
+        guard let next = ledger.nextExpiry(after: Date()) else { return }
+        grantTimer = Timer.scheduledTimer(withTimeInterval: max(0.2, next.timeIntervalSinceNow + 0.05), repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.pushState()
+                self.sweep()
+                self.scheduleGrantExpiry()
+            }
+        }
     }
 
     /// Whether the overlay offers "Allow": read live, so it goes as soon as overrides run out.
@@ -488,6 +527,7 @@ final class AppModel: ObservableObject {
         if case .success = result {
             data.markOverridden(target: target)
             pushState()
+            scheduleGrantExpiry()
         }
         return result
     }
