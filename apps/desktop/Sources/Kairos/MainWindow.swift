@@ -282,6 +282,9 @@ struct TodayPage: View {
                     }
                     .frame(width: 200)
                 }
+                if model.mode.blocks, let problem = model.jevReadiness(for: model.activeGroup).problem {
+                    Label(problem, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                }
                 HStack {
                     Text("Group").font(.headline)
                     GroupPicker(selection: Binding(get: { model.data.focus.activeGroupId }, set: { if let id = $0 { model.switchGroup(id) } }))
@@ -555,12 +558,9 @@ struct RulesPage: View {
                                 Text(g.wrappedValue.jevThreshold.formatted(.number.precision(.fractionLength(2)))).monospacedDigit()
                             }
                             .disabled(!g.wrappedValue.jevEnabled)
-                            if !model.hasJevKey {
-                                Label("No TypeSafe API key yet. Add one in Settings; until then only the lists above apply.", systemImage: "key")
+                            if let problem = model.jevReadiness(for: g.wrappedValue).problem {
+                                Label(problem, systemImage: "exclamationmark.triangle.fill")
                                     .font(.callout).foregroundStyle(.orange)
-                            }
-                            if model.currentTask == nil {
-                                Text("Jev compares against your current task, so it only runs when one is set.").font(.callout).foregroundStyle(.secondary)
                             }
                         }
                     }

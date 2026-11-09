@@ -184,6 +184,10 @@ final class AppModel: ObservableObject {
     var progress: Double { tempo.progress(now: now) }
     var overridesLeft: Int { ledger.remaining(max: data.settings.maxOverridesPerSession) }
 
+    func jevReadiness(for group: AppGroup?) -> JevReadiness {
+        JevReadiness(enabled: group?.jevEnabled ?? false, hasKey: hasJevKey, hasTask: currentTask != nil, lastError: lastJevError)
+    }
+
     var menuTitle: String {
         let name = currentTask?.title ?? activeGroup?.name ?? "Kairos"
         let short = name.count > 28 ? String(name.prefix(27)) + "…" : name
@@ -433,8 +437,14 @@ final class AppModel: ObservableObject {
         let key = Keychain.get("typesafe")
         let threshold = group.jevThreshold
         Task {
-            guard let verdict = try? await jev.check(apiKey: key, task: task.title, group: group.name,
-                                                     groupId: group.id.uuidString, subject: subject) else { return }
+            let verdict: JevVerdict
+            do {
+                verdict = try await jev.check(apiKey: key, task: task.title, group: group.name, groupId: group.id.uuidString, subject: subject)
+                self.lastJevError = nil
+            } catch {
+                self.lastJevError = error.localizedDescription
+                return
+            }
             // Only act if the window Jev judged is still in front and we are still blocking.
             guard verdict.shouldBlock(threshold: threshold), self.mode.blocks,
                   NSWorkspace.shared.frontmostApplication?.bundleIdentifier == bid,
