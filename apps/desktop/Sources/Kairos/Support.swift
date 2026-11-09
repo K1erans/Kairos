@@ -100,13 +100,18 @@ enum Apps {
         NSWorkspace.shared.runningApplications.first { $0.bundleIdentifier == bundleId }
     }
 
+    /// Opens the app the way clicking it in the Dock does. For a running app, `activate()` alone
+    /// is often refused when Kairos is not frontmost (Kairos Bar never is) and shows no window when
+    /// the app has none open; opening it again brings it forward and sends the reopen event, so it
+    /// shows a window.
     static func open(_ bundleId: String) {
-        if let running = NSWorkspace.shared.runningApplications.first(where: { $0.bundleIdentifier == bundleId }) {
-            running.unhide()
-            running.activate()
-        } else if let u = url(bundleId) {
-            NSWorkspace.shared.openApplication(at: u, configuration: .init())
-        }
+        let running = NSWorkspace.shared.runningApplications.first { $0.bundleIdentifier == bundleId }
+        running?.unhide()
+        // The copy that is running, when there is more than one on the Mac.
+        guard let u = running?.bundleURL ?? url(bundleId) else { return }
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.activates = true
+        NSWorkspace.shared.openApplication(at: u, configuration: configuration)
     }
 
     /// The display showing the app's frontmost normal window. Window bounds need no permission.
