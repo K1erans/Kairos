@@ -447,6 +447,12 @@ final class AppModel: ObservableObject {
 
     func endBreakWait() { tempo.endWait() }
 
+    /// The snapshot tool shows apps as open without opening them.
+    func showRunningForSnapshot(_ bundleIds: [String]) {
+        runningApps = Set(bundleIds)
+        openApps = bundleIds
+    }
+
     /// The snapshot tool shows a running or waiting timer without waiting for one. Never called
     /// by the running app, so it is no step in StrictMode.tla.
     func showTimerForSnapshot(_ engine: TempoEngine) {

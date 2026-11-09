@@ -44,8 +44,16 @@ extension Color {
 
 enum GroupPalette {
     static let colors = ["#4F7CFF", "#2FA36B", "#E0703A", "#B45BD6", "#D6455B", "#2AA7B8", "#C9A227", "#6B7280"]
+    /// What VoiceOver and the tooltip call each colour, in the order of `colors`.
+    static let colorNames = ["Blue", "Green", "Orange", "Purple", "Red", "Teal", "Yellow", "Grey"]
     static let icons = ["briefcase.fill", "book.fill", "house.fill", "paintbrush.fill", "hammer.fill", "gamecontroller.fill",
                         "music.note", "graduationcap.fill", "chevron.left.forwardslash.chevron.right", "pencil", "heart.fill", "square.grid.2x2"]
+    private static let iconNames = ["briefcase.fill": "Briefcase", "book.fill": "Book", "house.fill": "House",
+                                    "paintbrush.fill": "Paintbrush", "hammer.fill": "Hammer", "gamecontroller.fill": "Game controller",
+                                    "music.note": "Music", "graduationcap.fill": "Graduation cap",
+                                    "chevron.left.forwardslash.chevron.right": "Code", "pencil": "Pencil", "heart.fill": "Heart",
+                                    "square.grid.2x2": "Grid"]
+    static func iconName(_ symbol: String) -> String { iconNames[symbol] ?? symbol }
 }
 
 /// An installed application, found by scanning the usual folders.

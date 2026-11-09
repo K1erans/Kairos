@@ -32,7 +32,7 @@ public struct DockGeometry: Equatable, Sendable {
     public let icon: Double
     public let maxScale: Double
 
-    public init(slots: [Slot], icon: Double, maxScale: Double = 1.6) {
+    public init(slots: [Slot], icon: Double, maxScale: Double = DockMotion.magnification) {
         self.slots = slots
         self.icon = icon
         self.maxScale = maxScale
@@ -146,5 +146,21 @@ public struct DockGeometry: Equatable, Sendable {
         }
         guard let lastA = a.last, let lastB = b.last else { return p }
         return lastB.hi + (p - lastA.hi)
+    }
+}
+
+/// How Kairos Bar moves, from the macOS "Reduce motion" setting. With it on, icons keep their
+/// size under the pointer and auto-hide fades the bar out and in instead of sliding it.
+public struct DockMotion: Equatable, Sendable {
+    public let reduced: Bool
+    public init(reduced: Bool) { self.reduced = reduced }
+
+    public static let magnification = 1.6
+    public var maxScale: Double { reduced ? 1 : Self.magnification }
+
+    /// For `reveal` (0 hidden, 1 shown): the share of the slide still to go past the screen
+    /// edge, and the bar's opacity.
+    public func appearance(reveal: Double) -> (away: Double, opacity: Double) {
+        reduced ? (0, reveal) : (1 - reveal, 1)
     }
 }

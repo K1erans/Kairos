@@ -23,16 +23,18 @@ final class FloatingPanel: NSPanel {
 struct DockFrame: Equatable {
     let geometry: DockGeometry
     let edge: DockEdge
+    let motion: DockMotion
     let lead: Double, trail: Double
     /// Gap between the screen edge and the bar.
     static let inset = 4.0
 
-    init(data: AppData, running: [String] = []) {
-        self.init(Inputs(data: data, running: running))
+    init(data: AppData, running: [String] = [], reduceMotion: Bool = false) {
+        self.init(Inputs(data: data, running: running, reduceMotion: reduceMotion))
     }
 
     init(_ inputs: Inputs) {
-        geometry = DockGeometry(slots: inputs.slots, icon: inputs.icon)
+        motion = DockMotion(reduced: inputs.reduceMotion)
+        geometry = DockGeometry(slots: inputs.slots, icon: inputs.icon, maxScale: motion.maxScale)
         edge = inputs.edge
         (lead, trail) = geometry.overflow
     }
@@ -40,11 +42,12 @@ struct DockFrame: Equatable {
     /// What the frame depends on, compared before building one, because `overflow` samples
     /// every pointer position.
     struct Inputs: Equatable {
-        let slots: [DockGeometry.Slot], icon: Double, edge: DockEdge
-        init(data: AppData, running: [String]) {
+        let slots: [DockGeometry.Slot], icon: Double, edge: DockEdge, reduceMotion: Bool
+        init(data: AppData, running: [String], reduceMotion: Bool) {
             slots = DockGeometry.slots(for: data, running: running)
             icon = data.settings.iconSize
             edge = data.settings.dockEdge
+            self.reduceMotion = reduceMotion
         }
     }
 
@@ -123,10 +126,12 @@ final class DockPanelController {
     private var menuOpen = false
     private var frameTimer: Timer?
     private var decisionTimer: Timer?
+    /// System Settings > Accessibility > Display > Reduce motion.
+    private let reduceMotion = CurrentValueSubject<Bool, Never>(NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)
 
     init(model: AppModel) {
         self.model = model
-        tracker = DockTracker(frame: DockFrame(data: model.data, running: model.openApps))
+        tracker = DockTracker(frame: DockFrame(data: model.data, running: model.openApps, reduceMotion: reduceMotion.value))
         panel = FloatingPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         panel.level = .statusBar
         panel.isOpaque = false
@@ -140,8 +145,11 @@ final class DockPanelController {
         panel.contentView = host
 
         // @Published emits before the property changes, so use the emitted value.
-        model.$data.combineLatest(model.$openApps)
-            .map { DockFrame.Inputs(data: $0, running: $1) }
+        NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification)
+            .sink { [weak self] _ in self?.reduceMotion.send(NSWorkspace.shared.accessibilityDisplayShouldReduceMotion) }
+            .store(in: &cancellables)
+        model.$data.combineLatest(model.$openApps, reduceMotion.removeDuplicates())
+            .map { DockFrame.Inputs(data: $0, running: $1, reduceMotion: $2) }
             .removeDuplicates()
             .dropFirst()
             .map(DockFrame.init)
@@ -244,7 +252,7 @@ final class DockPanelController {
         let next = on ? axis : nil
         guard next != tracker.pointer else { return }
         // Ease in and out of magnification; follow the pointer exactly while on the bar.
-        if (next == nil) != (tracker.pointer == nil) {
+        if (next == nil) != (tracker.pointer == nil), !tracker.frame.motion.reduced {
             withAnimation(.easeOut(duration: 0.16)) { tracker.pointer = next }
         } else {
             tracker.pointer = next
@@ -272,20 +280,24 @@ final class DockPanelController {
     }
 }
 
-private struct DockGlassKey: EnvironmentKey { static let defaultValue = true }
+/// What Kairos Bar is drawn on. Liquid Glass does not render in the snapshot tool, so it draws
+/// the material, or a light stand-in for glass in the light appearance.
+enum DockSurface { case glass, material, lightGlassStandIn }
+
+private struct DockSurfaceKey: EnvironmentKey { static let defaultValue = DockSurface.glass }
 
 extension EnvironmentValues {
-    /// Off in the snapshot tool, where Liquid Glass does not render.
-    var dockGlass: Bool {
-        get { self[DockGlassKey.self] }
-        set { self[DockGlassKey.self] = newValue }
+    var dockSurface: DockSurface {
+        get { self[DockSurfaceKey.self] }
+        set { self[DockSurfaceKey.self] = newValue }
     }
 }
 
 struct DockView: View {
     @EnvironmentObject var model: AppModel
     @ObservedObject var tracker: DockTracker
-    @Environment(\.dockGlass) private var glass
+    @Environment(\.dockSurface) private var requestedSurface
+    @Environment(\.colorScheme) private var scheme
     @State private var resizeFrom: (mouse: NSPoint, size: Double)?
     @State private var cursorPushed = false
 
@@ -301,6 +313,7 @@ struct DockView: View {
         }
         .frame(width: f.size.width, height: f.size.height, alignment: .topLeading)
         .offset(slide(f))
+        .opacity(f.motion.appearance(reveal: tracker.reveal).opacity)
         .onDrop(of: [.fileURL], isTargeted: $tracker.dropTargeted) { providers in
             for provider in providers {
                 _ = provider.loadObject(ofClass: URL.self) { url, _ in
@@ -312,9 +325,10 @@ struct DockView: View {
         }
     }
 
-    /// Auto-hide slides the bar past its screen edge, where the panel clips it.
+    /// Auto-hide slides the bar past its screen edge, where the panel clips it. With Reduce
+    /// motion it fades in place instead.
     private func slide(_ f: DockFrame) -> CGSize {
-        let away = (1 - tracker.reveal) * (DockFrame.inset + f.geometry.thickness + 4)
+        let away = f.motion.appearance(reveal: tracker.reveal).away * (DockFrame.inset + f.geometry.thickness + 4)
         switch f.edge {
         case .left: return CGSize(width: -away, height: 0)
         case .right: return CGSize(width: away, height: 0)
@@ -324,13 +338,35 @@ struct DockView: View {
 
     // MARK: Pieces
 
+    private var surface: DockSurface {
+        if case .glass = requestedSurface, #unavailable(macOS 26.0) { return .material }
+        return requestedSurface
+    }
+
+    /// Marks on the bar (dots, separators, the + tiles) in the colour that stands out on it. The
+    /// material is always dark; Liquid Glass follows the system appearance, so on a light
+    /// wallpaper in the light appearance the marks turn dark. Each mark also has a thin edge
+    /// in the other colour, for glass that ends up darker or lighter than its appearance.
+    private var inkIsLight: Bool {
+        switch surface {
+        case .material: return true
+        case .lightGlassStandIn: return false
+        case .glass: return scheme == .dark
+        }
+    }
+    private var ink: Color { inkIsLight ? .white : .black }
+    private var halo: Color { inkIsLight ? .black : .white }
+
     private func background(_ f: DockFrame, _ layout: DockGeometry.Layout) -> some View {
         let g = f.geometry
         let shape = RoundedRectangle(cornerRadius: min(g.thickness * 0.3, 18), style: .continuous)
         let size = f.size(along: layout.end - layout.start, across: g.thickness)
         return Group {
-            if #available(macOS 26.0, *), glass {
+            if #available(macOS 26.0, *), surface == .glass {
                 Color.clear.glassEffect(.regular, in: shape)
+            } else if surface == .lightGlassStandIn {
+                shape.fill(.white.opacity(0.62))
+                    .overlay(shape.strokeBorder(.black.opacity(tracker.dropTargeted ? 0.5 : 0.1)))
             } else {
                 shape.fill(.ultraThinMaterial)
                     .background(Color.black.opacity(0.42), in: shape)
@@ -364,7 +400,7 @@ struct DockView: View {
                         if id == model.data.focus.activeGroupId, model.siteBlockingOff { warningBadge(size: item.size) }
                     }
                     .position(at)
-                if id == model.data.focus.activeGroupId { dot(item, f) }
+                if id == model.data.focus.activeGroupId { activeMark(item, f) }
             }
         case .newGroup:
             placeholder("plus", size: item.size)
@@ -389,9 +425,7 @@ struct DockView: View {
                 .position(at)
             if model.runningApps.contains(bundleId) { dot(item, f) }
         case .separator:
-            let line = f.size(along: 1, across: g.thickness * 0.6)
-            Rectangle().fill(.white.opacity(0.32))
-                .frame(width: line.width, height: line.height)
+            rule(f)
                 .allowsHitTesting(false)
                 .position(f.point(axis: item.center, cross: DockFrame.inset + g.thickness / 2))
         case let .running(bundleId):
@@ -430,7 +464,7 @@ struct DockView: View {
         // Opaque even when inactive, so a magnified tile never shows the bar's edge through it.
         return shape
             .fill(active ? color : color.opacity(0.24))
-            .background(Color(white: 0.16), in: shape)
+            .background(Color(white: inkIsLight ? 0.16 : 0.96), in: shape)
             .overlay(shape.strokeBorder(color.opacity(active ? 0 : 0.55), lineWidth: 1))
             .overlay {
                 Image(systemName: group.icon)
@@ -455,11 +489,13 @@ struct DockView: View {
     private func placeholder(_ symbol: String, size: Double) -> some View {
         let shape = RoundedRectangle(cornerRadius: size * 0.2, style: .continuous)
         return shape
-            .strokeBorder(.white.opacity(0.5), style: StrokeStyle(lineWidth: 1.2, dash: [3, 3]))
+            .strokeBorder(ink.opacity(0.55), style: StrokeStyle(lineWidth: 1.2, dash: [3, 3]))
+            .shadow(color: halo.opacity(0.35), radius: 0.5)
             .overlay {
                 Image(systemName: symbol)
                     .font(.system(size: size * 0.34, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.8))
+                    .foregroundStyle(ink.opacity(0.85))
+                    .shadow(color: halo.opacity(0.35), radius: 0.5)
             }
             .padding(size * 0.14)
     }
@@ -467,18 +503,39 @@ struct DockView: View {
     /// The running dot sits between the icon and the screen edge.
     private func dot(_ item: DockGeometry.Placement, _ f: DockFrame) -> some View {
         let d = f.geometry.icon < 30 ? 3.0 : 4.0
-        return Circle().fill(.white.opacity(0.85)).frame(width: d, height: d)
-            .shadow(color: .black.opacity(0.4), radius: 1)
+        return Circle().fill(ink.opacity(0.9)).frame(width: d, height: d)
+            .overlay(Circle().strokeBorder(halo.opacity(0.35), lineWidth: 0.5))
             .allowsHitTesting(false)
             .position(f.point(axis: item.center, cross: DockFrame.inset + f.geometry.padding / 2))
     }
 
+    /// The active group gets a short bar where an app gets its running dot, so the two never
+    /// look alike.
+    private func activeMark(_ item: DockGeometry.Placement, _ f: DockFrame) -> some View {
+        let d = f.geometry.icon < 30 ? 3.0 : 4.0
+        let size = f.size(along: max(10, f.geometry.icon * 0.36), across: d)
+        return Capsule().fill(ink.opacity(0.9))
+            .overlay(Capsule().strokeBorder(halo.opacity(0.35), lineWidth: 0.5))
+            .frame(width: size.width, height: size.height)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+            .position(f.point(axis: item.center, cross: DockFrame.inset + f.geometry.padding / 2))
+    }
+
+    /// The line of the divider and the separator: one line in the ink beside a fainter one in
+    /// the other colour, so it shows on a light or a dark bar.
+    private func rule(_ f: DockFrame) -> some View {
+        let line = f.size(along: 1, across: f.geometry.thickness * 0.6)
+        let pair = f.edge == .bottom
+            ? AnyView(HStack(spacing: 0) { Rectangle().fill(ink.opacity(0.4)); Rectangle().fill(halo.opacity(0.18)) })
+            : AnyView(VStack(spacing: 0) { Rectangle().fill(ink.opacity(0.4)); Rectangle().fill(halo.opacity(0.18)) })
+        return pair.frame(width: f.edge == .bottom ? 2 : line.width, height: f.edge == .bottom ? line.height : 2)
+    }
+
     private func divider(_ f: DockFrame) -> some View {
         let g = f.geometry
-        let line = f.size(along: 1, across: g.thickness * 0.6)
         let hit = f.size(along: DockGeometry.dividerLength, across: g.thickness)
-        return Rectangle().fill(.white.opacity(0.32))
-            .frame(width: line.width, height: line.height)
+        return rule(f)
             .frame(width: hit.width, height: hit.height)
             .contentShape(Rectangle())
             .onHover { inside in
@@ -620,7 +677,7 @@ struct DockView: View {
 enum DockActions {
     static func newGroup(_ model: AppModel) {
         later {
-            guard let name = ask("New Group", info: "It starts empty. Add apps from the bar, or drag them onto it.",
+            guard let name = ask("New Group", info: "It starts empty. Add apps from Kairos Bar, or drag them onto it.",
                                  value: "", button: "Create") else { return }
             model.switchGroup(model.addGroup(name: name))
         }

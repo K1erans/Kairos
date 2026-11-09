@@ -27,12 +27,16 @@ enum Snapshot {
             log.append("\(name).png \(Int(px.width))x\(Int(px.height))" + (focus.map { " focus=\($0)" } ?? ""))
         }
 
-        func dock(_ name: String, pointer: DockGeometry.Slot? = nil, offset: Double = 0, reveal: Double = 1) {
-            let frame = DockFrame(data: model.data)
+        func dock(_ name: String, pointer: DockGeometry.Slot? = nil, offset: Double = 0, reveal: Double = 1,
+                  reduceMotion: Bool = false, surface: DockSurface = .material) {
+            let frame = DockFrame(data: model.data, running: model.openApps, reduceMotion: reduceMotion)
             let rest = frame.geometry.layout(pointer: nil).items
             let p = pointer.flatMap { slot in rest.first { $0.slot == slot }?.center }.map { $0 + offset }
+            let light = surface == .lightGlassStandIn
             shot("dock-\(name)", DockStage(tracker: DockTracker(frame: frame, pointer: p, reveal: reveal),
-                                           autoHide: model.data.settings.autoHideBar).environment(\.dockGlass, false))
+                                           autoHide: model.data.settings.autoHideBar, light: light)
+                .environment(\.dockSurface, surface)
+                .environment(\.colorScheme, light ? .light : (NSApp.appearance?.name == .aqua ? .light : .dark)))
         }
 
         let work = model.data.groups[0]
@@ -82,6 +86,19 @@ enum Snapshot {
         model.data.settings.dockEdge = .left
         model.data.groups.removeLast(5)
         model.data.focus.currentTaskId = current
+        // Open apps: running dots, and an app that is not in the group after a separator.
+        model.showRunningForSnapshot(["com.apple.Safari", "com.apple.Notes", "com.hnc.Discord"])
+        dock("left-36-running")
+        dock("left-36-running-light-glass", surface: .lightGlassStandIn)
+        model.data.settings.dockEdge = .bottom
+        dock("bottom-36-running-light-glass", surface: .lightGlassStandIn)
+        model.data.settings.dockEdge = .left
+        // Reduce motion: no magnification under the pointer, and auto-hide fades instead of sliding.
+        dock("left-36-hover-app-reduce-motion", pointer: .app("com.apple.Safari"), reduceMotion: true)
+        model.data.settings.autoHideBar = true
+        dock("left-36-autohide-sliding-reduce-motion", reveal: 0.5, reduceMotion: true)
+        model.data.settings.autoHideBar = false
+        model.showRunningForSnapshot([])
 
         for page in Page.allCases {
             model.page = page
@@ -287,9 +304,14 @@ private final class SnapshotWindow: NSWindow {
 
 /// A stand-in desktop so translucent surfaces have something to sit on.
 private struct Wallpaper: View {
+    var light = false
+
     var body: some View {
-        LinearGradient(colors: [Color(red: 0.25, green: 0.35, blue: 0.55), Color(red: 0.75, green: 0.55, blue: 0.45)],
-                       startPoint: .topLeading, endPoint: .bottomTrailing)
+        light
+            ? LinearGradient(colors: [Color(red: 0.93, green: 0.94, blue: 0.97), Color(red: 0.98, green: 0.93, blue: 0.86)],
+                             startPoint: .topLeading, endPoint: .bottomTrailing)
+            : LinearGradient(colors: [Color(red: 0.25, green: 0.35, blue: 0.55), Color(red: 0.75, green: 0.55, blue: 0.45)],
+                             startPoint: .topLeading, endPoint: .bottomTrailing)
     }
 }
 
@@ -299,6 +321,7 @@ private struct Wallpaper: View {
 private struct DockStage: View {
     @ObservedObject var tracker: DockTracker
     var autoHide = false
+    var light = false
 
     var body: some View {
         let f = tracker.frame, g = f.geometry
@@ -323,6 +346,6 @@ private struct DockStage: View {
         }
         .border(Color.red.opacity(0.8), width: 1)
         .padding(24)
-        .background(Wallpaper())
+        .background(Wallpaper(light: light))
     }
 }

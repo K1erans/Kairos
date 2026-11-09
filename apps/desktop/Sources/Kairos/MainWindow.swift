@@ -92,8 +92,9 @@ struct TaskRow: View {
                         Label(g.name, systemImage: g.icon).foregroundStyle(Color(hex: g.colorHex))
                     }
                     if let due = task.due {
-                        Label(due.formatted(date: .abbreviated, time: .shortened), systemImage: "calendar")
+                        Label(DueText.short(due, now: model.now), systemImage: "calendar")
                             .foregroundStyle(due < Date() && task.status == .todo ? .red : .secondary)
+                            .help(due.formatted(date: .complete, time: .shortened))
                     }
                     if let e = task.estimateMin { Label("\(e) min", systemImage: "clock") }
                     if task.priority > 0 { Label(["", "Low", "Medium", "High"][task.priority], systemImage: "flag.fill") }
@@ -102,6 +103,8 @@ struct TaskRow: View {
                 }
                 .font(.caption)
                 .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .fixedSize(horizontal: false, vertical: true)
             }
             Spacer()
             if model.data.focus.currentTaskId == task.id {
@@ -147,8 +150,9 @@ struct QuickAddField: View {
     var body: some View {
         HStack {
             Image(systemName: "plus.circle.fill").foregroundStyle(.secondary)
-            TextField("Add a task — e.g. Draft blog post tomorrow 3pm @Work ~45m !high", text: $text)
+            TextField("Add a task, like \u{201C}Report tomorrow 3pm\u{201D}", text: $text)
                 .textFieldStyle(.plain)
+                .help("Type a title, then any of: a day and time (tomorrow 3pm), @Group, ~45m for an estimate, !high for priority.")
                 .onSubmit { if model.addTask(from: text) != nil { text = "" } }
         }
         .padding(10)
@@ -225,22 +229,28 @@ struct AppPicker: View {
     @State private var apps: [InstalledApp] = []
     @State private var query = ""
 
+    private var matches: [InstalledApp] { apps.filter { query.isEmpty || $0.name.localizedCaseInsensitiveContains(query) } }
+
+    private func picked(_ app: InstalledApp) -> Binding<Bool> {
+        Binding(get: { selection.contains(app.bundleId) }, set: { on in
+            if on { if !selection.contains(app.bundleId) { selection.append(app.bundleId) } }
+            else { selection.removeAll { $0 == app.bundleId } }
+        })
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             TextField("Search apps", text: $query).textFieldStyle(.roundedBorder).padding(12)
-            List(apps.filter { query.isEmpty || $0.name.localizedCaseInsensitiveContains(query) }) { app in
-                HStack {
-                    Image(nsImage: NSWorkspace.shared.icon(forFile: app.url.path)).resizable().frame(width: 26, height: 26)
-                    Text(app.name)
-                    Spacer()
-                    Image(systemName: selection.contains(app.bundleId) ? "checkmark.circle.fill" : "circle")
-                        .foregroundStyle(selection.contains(app.bundleId) ? Color.accentColor : .secondary)
+                // Return ticks or unticks the first match, so the keyboard alone can pick apps.
+                .onSubmit { if let first = matches.first { picked(first).wrappedValue.toggle() } }
+            List(matches) { app in
+                Toggle(isOn: picked(app)) {
+                    HStack {
+                        Image(nsImage: NSWorkspace.shared.icon(forFile: app.url.path)).resizable().frame(width: 26, height: 26)
+                        Text(app.name)
+                    }
                 }
-                .contentShape(Rectangle())
-                .onTapGesture {
-                    if selection.contains(app.bundleId) { selection.removeAll { $0 == app.bundleId } }
-                    else { selection.append(app.bundleId) }
-                }
+                .toggleStyle(.checkbox)
             }
             HStack { Spacer(); Button("Done") { dismiss() }.keyboardShortcut(.defaultAction) }.padding(12)
         }
@@ -505,6 +515,7 @@ struct TaskDetail: View {
             Section("Subtasks") {
                 ForEach(model.subtasks(of: task.id)) { sub in
                     Toggle(sub.title, isOn: Binding(get: { sub.status == .done }, set: { model.setDone(sub, $0) }))
+                        .toggleStyle(.checkbox)
                 }
                 TextField("Add a subtask", text: $subtask).onSubmit { model.addSubtask(subtask, to: task); subtask = "" }
             }
@@ -622,24 +633,35 @@ struct GroupDetail: View {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Colour").font(.headline)
                     HStack {
-                        ForEach(GroupPalette.colors, id: \.self) { hex in
-                            Circle().fill(Color(hex: hex)).frame(width: 22, height: 22)
-                                .overlay(Circle().strokeBorder(.primary, lineWidth: g.wrappedValue.colorHex == hex ? 2 : 0))
-                                .onTapGesture { g.wrappedValue.colorHex = hex }
-                                .accessibilityLabel("Colour \(hex)")
+                        ForEach(Array(GroupPalette.colors.enumerated()), id: \.element) { i, hex in
+                            let chosen = g.wrappedValue.colorHex == hex
+                            Button { g.wrappedValue.colorHex = hex } label: {
+                                Circle().fill(Color(hex: hex)).frame(width: 22, height: 22)
+                                    .overlay(Circle().strokeBorder(.primary, lineWidth: chosen ? 2 : 0))
+                            }
+                            .buttonStyle(.plain)
+                            .help(GroupPalette.colorNames[i])
+                            .accessibilityLabel(GroupPalette.colorNames[i])
+                            .accessibilityAddTraits(chosen ? .isSelected : [])
                         }
                     }
                     Text("Icon").font(.headline).padding(.top, 6)
                     HStack {
                         ForEach(GroupPalette.icons, id: \.self) { name in
-                            Image(systemName: name).frame(width: 28, height: 28)
-                                .background(g.wrappedValue.icon == name ? Color.accentColor.opacity(0.25) : .clear, in: RoundedRectangle(cornerRadius: 6))
-                                .onTapGesture { g.wrappedValue.icon = name }
-                                .accessibilityLabel(name)
+                            let chosen = g.wrappedValue.icon == name
+                            Button { g.wrappedValue.icon = name } label: {
+                                Image(systemName: name).frame(width: 28, height: 28)
+                                    .background(chosen ? Color.accentColor.opacity(0.25) : .clear, in: RoundedRectangle(cornerRadius: 6))
+                                    .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .help(GroupPalette.iconName(name))
+                            .accessibilityLabel(GroupPalette.iconName(name))
+                            .accessibilityAddTraits(chosen ? .isSelected : [])
                         }
                     }
                 }
-                AppListEditor(title: "Apps in Kairos Bar", empty: "No apps yet. Add some, or drag an app onto the bar.",
+                AppListEditor(title: "Apps in Kairos Bar", empty: "No apps yet. Add some, or drag an app onto Kairos Bar.",
                               bundleIds: g.dockApps)
                 Divider()
                 Button("Delete Group\u{2026}", role: .destructive) { deleting = g.wrappedValue }
@@ -682,6 +704,8 @@ struct RulesPage: View {
                         hidden(g)
                         VStack(alignment: .leading, spacing: 6) {
                             Text("Smart blocking with Jev").font(.headline)
+                            Text("Jev is a service from TypeSafe that checks whether a page or app fits your current task. It needs a TypeSafe key (Settings > API keys).")
+                                .font(.callout).foregroundStyle(.secondary)
                             Toggle("Ask Jev about sites and apps that are on no list", isOn: g.jevEnabled)
                             HStack {
                                 Text("Block when \u{201C}distracting\u{201D} is at least")
@@ -709,7 +733,7 @@ struct RulesPage: View {
             Text("Hidden page elements").font(.headline)
             let entries = g.wrappedValue.hiddenElements.sorted { $0.key < $1.key }
             if entries.isEmpty {
-                Text("None yet. Use \u{201C}Pick an element to hide\u{201D} in the Kairos Shield popup in Chrome.").foregroundStyle(.secondary).font(.callout)
+                Text("None yet. Use \u{201C}Hide an element on this page\u{201D} in the Kairos Shield popup in Chrome.").foregroundStyle(.secondary).font(.callout)
             }
             ForEach(entries, id: \.key) { host, selectors in
                 ForEach(selectors, id: \.self) { selector in
@@ -869,13 +893,13 @@ struct SettingsPage: View {
                     ForEach(DockEdge.allCases, id: \.self) { Text($0.rawValue.capitalized).tag($0) }
                 }
                 Slider(value: $model.data.settings.iconSize, in: 20...64, step: 2) { Text("Icon size: \(Int(model.data.settings.iconSize))") }
-                Text("You can also drag the divider on the bar itself.").font(.callout).foregroundStyle(.secondary)
+                Text("You can also drag the divider on Kairos Bar itself.").font(.callout).foregroundStyle(.secondary)
                 Toggle("Automatically hide and show Kairos Bar", isOn: $model.data.settings.autoHideBar)
                 VStack(alignment: .leading, spacing: 4) {
                     Toggle("Use Kairos Bar instead of the macOS Dock", isOn: Binding(
                         get: { model.data.settings.replacesSystemDock },
                         set: { model.data.settings.setReplacesSystemDock($0) }))
-                    Text("macOS can\u{2019}t remove the Dock, so Kairos hides it and puts your Dock settings back when you turn this off or quit. Turning this on also turns on \u{201C}Automatically hide and show Kairos Bar\u{201D}, so the bar slides away like the Dock did. If Kairos ever stops without putting the Dock back, a small background helper does it within 15 seconds.")
+                    Text("macOS can\u{2019}t remove the Dock, so Kairos hides it and puts your Dock settings back when you turn this off or quit. Turning this on also turns on \u{201C}Automatically hide and show Kairos Bar\u{201D}, so Kairos Bar slides away like the Dock did. If Kairos ever stops without putting the Dock back, a small background helper does it within 15 seconds.")
                         .font(.callout).foregroundStyle(.secondary)
                 }
             }
@@ -1001,11 +1025,11 @@ struct OnboardingSheet: View {
             Text("Welcome to Kairos").font(.title.weight(.semibold))
             Text("Kairos shows only the apps for what you are doing, blocks the rest while you focus, and times your work.")
                 .foregroundStyle(.secondary)
-            step("1", "Groups", "You start with Work, Study and Personal, each with its own apps, blocked sites and timer. Switch group from Kairos Bar or the menu bar, and add one with the + on the bar.")
+            step("1", "Groups", "You start with Work, Study and Personal, each with its own apps, blocked sites and timer. Switch group from Kairos Bar or the menu bar, and add one with the + on Kairos Bar.")
             step("2", "Tasks", "Press ⌥Space anywhere to add a task, like \u{201C}Draft report tomorrow 3pm\u{201D}. Pick one on Today and start a focus session.")
             step("3", "Set up", browsers.isEmpty
-                ? "Today lists what is left to set up: the Kairos Shield extension (no Chromium browser was found yet), keys for Jev and scenes, and window titles."
-                : "Today lists what is left to set up: loading the Kairos Shield and Kairos Read extensions, keys for Jev and scenes, and window titles. The browser link is installed for \(browsers.joined(separator: ", ")).")
+                ? "Today lists what is left to set up: the Kairos Shield extension (no Chromium browser was found yet), a key for Jev, which checks whether a page or app fits your current task, a key for scenes, and window titles."
+                : "Today lists what is left to set up: loading the Kairos Shield and Kairos Read extensions, a key for Jev, which checks whether a page or app fits your current task, a key for scenes, and window titles. The browser link is installed for \(browsers.joined(separator: ", ")).")
             HStack {
                 Spacer()
                 Button("Go to Today") { model.page = .today; model.data.onboarded = true }.keyboardShortcut(.defaultAction)
