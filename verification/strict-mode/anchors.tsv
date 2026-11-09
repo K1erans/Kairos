@@ -1,0 +1,21 @@
+# file	expected count	exact text	what in StrictMode.tla mirrors it
+apps/desktop/Sources/KairosCore/Rules.swift	1	guard mode != .strict else { return .failure(.strict) }	LedgerRefusesStrict in Override
+apps/desktop/Sources/KairosCore/Rules.swift	1	guard mode == .focus else { return .failure(.notBlocking) }	mode = "focus" in Override
+apps/desktop/Sources/KairosCore/Rules.swift	1	guard used < max else { return .failure(.exhausted) }	LedgerChecksMax in Override
+apps/desktop/Sources/KairosCore/Rules.swift	1	public mutating func reset() { used = 0; allows = [:] }	Ledger
+apps/desktop/Sources/KairosCore/Models.swift	1	public var blocks: Bool { self == .focus || self == .strict }	Blocks
+apps/desktop/Sources/KairosCore/Tempo.swift	1	case .focus: return holdsStrict || preset.strict ? .strict : .focus	TempoMode
+apps/desktop/Sources/KairosCore/Tempo.swift	1	if phase == .idle { self.preset = preset; pendingPreset = nil } else { pendingPreset = preset }	SwitchGroup
+apps/desktop/Sources/KairosCore/Tempo.swift	1	holdsStrict = strict	holds in StartFocus
+apps/desktop/Sources/KairosCore/Tempo.swift	1	interruptions = 0; total = 0; focusCount = 0; holdsStrict = false	Halt
+apps/desktop/Sources/KairosCore/Tempo.swift	1	if let p = pendingPreset { preset = p; pendingPreset = nil }	PresetAfterPending
+apps/desktop/Sources/Kairos/AppModel.swift	1	if (new.blocks && !old.blocks) || (new == .strict && old != .strict) { ledger.reset() }	Ledger (blocking turns on, ResetsOnEnterStrict)
+apps/desktop/Sources/Kairos/AppModel.swift	2	ledger.reset()	Ledger (the two reset sites: modeChanged and .started(focus))
+apps/desktop/Sources/Kairos/AppModel.swift	1	if tempo.phase != .idle { focus.mode = tempo.mode }	SyncsModeFromTimer in Synced
+apps/desktop/Sources/Kairos/AppModel.swift	1	data.focus.mode = .off	mode' = "off" in Halt
+apps/desktop/Sources/Kairos/AppModel.swift	1	apply(tempo.start(.focus, strict: mode == .strict, now: Date()))	StartFocus
+apps/desktop/Sources/Kairos/AppModel.swift	1	func skipPhase() { if !strictLocked { apply(tempo.skip(now: Date())) } }	Skip (LocksStrictControls)
+apps/desktop/Sources/Kairos/AppModel.swift	1	func stopTimer() { if !strictLocked { apply(tempo.stop(now: Date())) } }	Stop (LocksStrictControls)
+apps/desktop/Sources/Kairos/AppModel.swift	1	let result = ledger.request(target: target, reason: reason, mode: mode, max: data.settings.maxOverridesPerSession,	Override
+apps/desktop/Sources/Kairos/KairosApp.swift	1	.disabled(model.tempo.phase != .idle)	PickerLockedByTimer in SetMode
+apps/desktop/Sources/Kairos/AppModel.swift	1	var strictLocked: Bool { tempo.phase == .focus && mode == .strict }	InStrictPhase

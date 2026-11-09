@@ -1,0 +1,69 @@
+import { formatTimeLeft } from "./lib/match.js";
+
+const $ = (id) => document.getElementById(id);
+const LABELS = { off: "Off", focus: "Focus", break: "Break", strict: "Strict" };
+let tab = null;
+let data = null;
+
+async function load() {
+  [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  data = await chrome.runtime.sendMessage({ type: "popup.get", url: tab && tab.url ? tab.url : "" }).catch(() => null);
+  render();
+}
+
+function render() {
+  if (!data) return;
+  const { state, connected, manualMode } = data;
+  $("group").textContent = state.groupName || "Kairos Shield";
+  $("dot").style.background = state.mode === "off" ? "#9aa0ad" : state.groupColor;
+  $("mode").textContent = LABELS[state.mode] || state.mode;
+  $("task").textContent = state.currentTask ? state.currentTask.title : "None";
+  $("time").textContent = formatTimeLeft(state.endsAt) || "–";
+  $("overrides").textContent = state.mode === "focus" && connected ? String(state.overridesLeft) : "–";
+  $("bridge").textContent = connected ? "Connected" : "Not connected";
+  $("warn").hidden = connected;
+  $("manualRow").hidden = connected;
+  $("manual").value = manualMode || "";
+  const pickable = !!(tab && /^https?:\/\//i.test(tab.url || ""));
+  $("pick").disabled = !pickable;
+  const list = $("list");
+  list.textContent = "";
+  for (const rule of data.localSelectors || []) {
+    const li = document.createElement("li");
+    const code = document.createElement("code");
+    code.textContent = rule.selector;
+    code.title = rule.selector;
+    const remove = document.createElement("button");
+    remove.textContent = "Show";
+    remove.addEventListener("click", async () => {
+      await chrome.runtime.sendMessage({ type: "elements.remove", host: rule.host, selector: rule.selector });
+      load();
+    });
+    li.append(code, remove);
+    list.append(li);
+  }
+  $("rules").hidden = (data.localSelectors || []).length === 0;
+}
+
+$("manual").addEventListener("change", async (e) => {
+  await chrome.runtime.sendMessage({ type: "popup.setMode", mode: e.target.value });
+  load();
+});
+
+$("pick").addEventListener("click", async () => {
+  if (!tab || !tab.id) return;
+  try {
+    await chrome.tabs.sendMessage(tab.id, { type: "picker.start" });
+    window.close();
+  } catch (_) {
+    $("pick").textContent = "Reload this page first, then try again";
+  }
+});
+
+chrome.runtime.onMessage.addListener((msg) => {
+  if (msg && msg.type === "page.update") load();
+});
+setInterval(() => {
+  if (data) $("time").textContent = formatTimeLeft(data.state.endsAt) || "–";
+}, 1000);
+load();

@@ -1,0 +1,31 @@
+:root { color-scheme: light dark; --accent: #22a06b; --line: color-mix(in srgb, CanvasText 15%, transparent); }
+* { box-sizing: border-box; }
+body { margin: 0; padding: 14px; font: 13px/1.45 -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif; }
+h1 { font-size: 15px; margin: 0 0 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: GrayText; margin: 0 0 8px; }
+section { border-top: 1px solid var(--line); padding: 12px 0; }
+.status { margin: 0; min-height: 18px; color: #b45309; }
+.sentence { margin: 0 0 10px; min-height: 58px; max-height: 120px; overflow: auto; font-size: 14px; }
+.meta { display: flex; justify-content: flex-end; color: GrayText; font-size: 12px; font-variant-numeric: tabular-nums; }
+input[type="range"] { width: 100%; accent-color: var(--accent); }
+.controls { display: flex; justify-content: center; gap: 6px; margin: 8px 0 10px; }
+.controls button { width: 38px; height: 38px; border-radius: 50%; padding: 0; font-size: 14px; }
+.controls .primary { width: 46px; height: 46px; background: var(--accent); color: #fff; border-color: transparent; font-size: 17px; }
+button, select, input[type="text"] { font: inherit; }
+button { padding: 7px 12px; border-radius: 7px; border: 1px solid var(--line); background: ButtonFace; color: ButtonText; cursor: pointer; }
+button:disabled { opacity: 0.45; cursor: default; }
+.row { display: flex; gap: 8px; margin-top: 8px; }
+.row > * { flex: 1; }
+.row > button[type="submit"] { flex: 0 0 auto; }
+.field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; }
+.field.inline { flex-direction: row; align-items: center; justify-content: space-between; }
+.field select { width: 100%; padding: 5px; }
+input[type="text"] { padding: 7px 9px; border-radius: 7px; border: 1px solid var(--line); min-width: 0; }
+ul { list-style: none; margin: 8px 0 0; padding: 0; }
+li { display: flex; align-items: center; gap: 6px; padding: 5px 0; }
+li .grow { flex: 1; min-width: 0; }
+li .name { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+li .why { display: block; color: GrayText; font-size: 12px; }
+li button { padding: 3px 9px; flex: 0 0 auto; }
+#sceneFrame iframe { width: 100%; height: 340px; border: 1px solid var(--line); border-radius: 8px; margin-top: 10px; display: block; background: #11141c; }
+[hidden] { display: none !important; }

@@ -1,0 +1,23 @@
+{
+  "manifest_version": 3,
+  "name": "Kairos Shield",
+  "version": "0.1.0",
+  "description": "Blocks sites and page elements based on your active Kairos group, with smart blocking by Jev.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAsKw1ODYM2cdU9wSdaFYusRQ7+f5KMo+Z0fqsaXJY179PdOQwoE9bP5rU6b+74NU+L6kpQdKcp3xt3pUgIvJjtmdd4mleRtAESV4/6Lr7iGIrkgfjgd0TXV34CoqXsOFcqhas4zlVWWADXkt1g5BEGpBDrw2Ai1Pv00PLIjETDfCUOGpqq9g0OCd8h9OAJXgY6zvq0YJqSAMSShdG+9GXX/zzIfF4uUBUxRgIY1+VlbCCHDFiOQmlF35Zy65rYSA3eUHNYkCKy06J6SB30RlrsIboayMtzRU52Lq13SgdJ+wobrBucWz34TsrGPrQme8VRfmsr97xAQuft0iMwPVqXQIDAQAB",
+  "minimum_chrome_version": "116",
+  "icons": { "16": "icons/icon16.png", "48": "icons/icon48.png", "128": "icons/icon128.png" },
+  "action": { "default_title": "Kairos Shield", "default_popup": "popup.html", "default_icon": { "16": "icons/icon16.png", "48": "icons/icon48.png" } },
+  "background": { "service_worker": "background.js", "type": "module" },
+  "permissions": ["declarativeNetRequest", "nativeMessaging", "storage", "tabs", "alarms"],
+  "host_permissions": ["<all_urls>"],
+  "content_scripts": [
+    {
+      "matches": ["http://*/*", "https://*/*"],
+      "js": ["lib/selector.js", "content.js"],
+      "run_at": "document_start"
+    }
+  ],
+  "web_accessible_resources": [
+    { "resources": ["blocked.html"], "matches": ["<all_urls>"] }
+  ]
+}

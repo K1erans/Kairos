@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Kairos Shield</title>
+    <style>
+      :root { color-scheme: light dark; }
+      body { width: 300px; margin: 0; padding: 14px; font: 13px/1.45 -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif; }
+      h1 { font-size: 15px; margin: 0 0 10px; display: flex; align-items: center; gap: 8px; }
+      .dot { width: 10px; height: 10px; border-radius: 50%; background: #9aa0ad; }
+      .row { display: flex; justify-content: space-between; gap: 12px; padding: 4px 0; }
+      .row span:first-child { color: GrayText; }
+      .row span:last-child { text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .warn { background: #fdf0dc; color: #7a4a05; border-radius: 6px; padding: 8px 10px; margin: 8px 0; }
+      select, button { font: inherit; }
+      button { width: 100%; padding: 8px; margin-top: 10px; border-radius: 6px; border: 1px solid ButtonBorder; cursor: pointer; }
+      h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: GrayText; margin: 14px 0 4px; }
+      ul { list-style: none; margin: 0; padding: 0; }
+      li { display: flex; align-items: center; gap: 6px; padding: 3px 0; }
+      li code { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
+      li button { width: auto; margin: 0; padding: 2px 8px; }
+      [hidden] { display: none !important; }
+    </style>
+  </head>
+  <body>
+    <h1><span class="dot" id="dot"></span><span id="group">Kairos Shield</span></h1>
+    <div class="warn" id="warn" hidden>Kairos Desktop is not running. Shield is using the last known mode; app blocking is off.</div>
+    <div class="row"><span>Mode</span><span id="mode"></span></div>
+    <div class="row" id="manualRow" hidden>
+      <span>Set mode</span>
+      <select id="manual" aria-label="Mode while Kairos Desktop is away">
+        <option value="">Last known</option>
+        <option value="off">Off</option>
+        <option value="focus">Focus</option>
+        <option value="break">Break</option>
+        <option value="strict">Strict</option>
+      </select>
+    </div>
+    <div class="row"><span>Task</span><span id="task"></span></div>
+    <div class="row"><span>Time left</span><span id="time"></span></div>
+    <div class="row"><span>Overrides left</span><span id="overrides"></span></div>
+    <div class="row"><span>Kairos Desktop</span><span id="bridge"></span></div>
+    <button id="pick">Hide an element on this page</button>
+    <div id="rules" hidden>
+      <h2>Hidden on this site</h2>
+      <ul id="list"></ul>
+    </div>
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>

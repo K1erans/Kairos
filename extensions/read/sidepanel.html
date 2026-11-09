@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Kairos Read</title>
+    <link rel="stylesheet" href="sidepanel.css" />
+  </head>
+  <body>
+    <header>
+      <h1 id="title">Kairos Read</h1>
+      <p id="status" class="status" aria-live="polite"></p>
+    </header>
+
+    <section aria-label="Player">
+      <p id="sentence" class="sentence"></p>
+      <input id="progress" type="range" min="0" max="0" value="0" aria-label="Position in article" disabled />
+      <div class="meta"><span id="count"></span></div>
+      <div class="controls">
+        <button id="prevPara" title="Previous paragraph" aria-label="Previous paragraph">⏮</button>
+        <button id="prev" title="Previous sentence" aria-label="Previous sentence">◀</button>
+        <button id="toggle" class="primary" title="Play or pause (Alt+R)" aria-label="Play">▶</button>
+        <button id="next" title="Next sentence" aria-label="Next sentence">▶</button>
+        <button id="nextPara" title="Next paragraph" aria-label="Next paragraph">⏭</button>
+        <button id="stop" title="Stop" aria-label="Stop">■</button>
+      </div>
+      <div class="row">
+        <button id="readPage">Read this page</button>
+        <button id="queuePage">Read later</button>
+      </div>
+    </section>
+
+    <section aria-label="Settings">
+      <label class="field">
+        <span>Speed <output id="rateOut">1×</output></span>
+        <input id="rate" type="range" min="0.5" max="3" step="0.1" value="1" />
+        <small id="rateNote" class="status" hidden></small>
+      </label>
+      <label class="field">
+        <span>Voice</span>
+        <select id="voice"></select>
+      </label>
+      <label class="field inline">
+        <span>Highlight colour</span>
+        <input id="highlight" type="color" value="#ffe066" />
+      </label>
+      <label class="field inline">
+        <span>Read to me: start articles on their own</span>
+        <input id="readToMe" type="checkbox" />
+      </label>
+    </section>
+
+    <section id="queueSection" aria-label="Read later" hidden>
+      <h2>Read later</h2>
+      <ul id="queue"></ul>
+    </section>
+
+    <section aria-label="3D scenes">
+      <h2>3D scenes</h2>
+      <p id="sceneNote" class="status"></p>
+      <button id="visualise">Visualise this article</button>
+      <ul id="candidates"></ul>
+      <ul id="saved"></ul>
+      <div id="sceneWrap" hidden>
+        <div id="sceneFrame"></div>
+        <form id="changeForm" class="row">
+          <input id="change" type="text" maxlength="300" placeholder="Change it: e.g. show a cross-section" aria-label="Change the scene" />
+          <button type="submit">Change</button>
+        </form>
+        <div class="row">
+          <button id="export">Export HTML</button>
+          <button id="closeScene">Close</button>
+        </div>
+      </div>
+    </section>
+
+    <script type="module" src="sidepanel.js"></script>
+  </body>
+</html>

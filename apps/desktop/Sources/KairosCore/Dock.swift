@@ -1,0 +1,150 @@
+import Foundation
+
+/// Geometry of Kairos Bar. Positions are measured along the bar (the axis, 0 at the leading end
+/// of the bar at rest) and across it (from the screen edge inward). Pure, so magnification and
+/// the pointer's hit zone are testable without a screen.
+public struct DockGeometry: Equatable, Sendable {
+    public enum Slot: Hashable, Sendable {
+        /// `running` is an open app that is not pinned to the active group; `separator` sets
+        /// those apart, as the Dock does for recent apps.
+        case group(UUID), newGroup, divider, app(String), addApp, separator, running(String)
+        public var magnifies: Bool { self != .divider && self != .separator }
+    }
+
+    public struct Placement: Equatable, Sendable {
+        public let slot: Slot
+        /// Centre along the axis.
+        public let center: Double
+        /// Extent along the axis. Icons are square, so also their extent across the bar.
+        public let size: Double
+        public let scale: Double
+    }
+
+    public struct Layout: Equatable, Sendable {
+        public let items: [Placement]
+        /// Where the bar's background starts and ends along the axis.
+        public let start: Double, end: Double
+        /// The magnifying slot under the pointer, which gets the name label.
+        public let hovered: Int?
+    }
+
+    public let slots: [Slot]
+    public let icon: Double
+    public let maxScale: Double
+
+    public init(slots: [Slot], icon: Double, maxScale: Double = 1.6) {
+        self.slots = slots
+        self.icon = icon
+        self.maxScale = maxScale
+    }
+
+    /// `running` is the open apps in launch order. Those not pinned to the active group follow
+    /// the pinned ones after a separator, so an app you open always has an icon on the bar.
+    public static func slots(for data: AppData, running: [String] = []) -> [Slot] {
+        let apps = data.activeGroup?.dockApps ?? []
+        var seen = Set(apps)
+        let extra = running.filter { seen.insert($0).inserted }
+        return data.groups.map { .group($0.id) } + [.newGroup, .divider] + (apps.isEmpty ? [.addApp] : apps.map { .app($0) })
+            + (extra.isEmpty ? [] : [.separator] + extra.map { .running($0) })
+    }
+
+    public static let dividerLength = 11.0
+    public var gap: Double { max(3, (icon * 0.14).rounded()) }
+    public var padding: Double { max(4, (icon * 0.16).rounded()) }
+    /// How far from the pointer, along the axis, an icon still grows.
+    public var range: Double { icon * 2.5 }
+    public var thickness: Double { icon + 2 * padding }
+    /// How far a magnified icon reaches past the bar, away from the screen edge.
+    public var headroom: Double { (maxScale - 1) * icon }
+
+    public func baseLength(_ slot: Slot) -> Double { slot.magnifies ? icon : Self.dividerLength }
+
+    public var restLength: Double {
+        2 * padding + slots.reduce(0) { $0 + baseLength($1) } + gap * Double(max(0, slots.count - 1))
+    }
+
+    /// The Dock's falloff: full size under the pointer, easing on a cosine to rest size at `range`.
+    public func scale(distance: Double) -> Double {
+        let d = min(abs(distance), range)
+        return 1 + (maxScale - 1) * (cos(Double.pi * d / range) + 1) / 2
+    }
+
+    /// Lays the slots out for a pointer at `pointer` along the axis, or at rest for nil. Icons
+    /// grow along the bar and push their neighbours apart, so nothing overlaps, and the bar is
+    /// shifted so the point under the pointer stays under it.
+    public func layout(pointer: Double?) -> Layout {
+        let rest = spans(scales: Array(repeating: 1, count: slots.count))
+        guard let p = pointer, !slots.isEmpty else {
+            return Layout(items: place(rest, scales: Array(repeating: 1, count: slots.count), shift: 0), start: 0, end: restLength, hovered: nil)
+        }
+        let scales = slots.indices.map { i in
+            slots[i].magnifies ? scale(distance: p - (rest[i].lo + rest[i].hi) / 2) : 1
+        }
+        let grown = spans(scales: scales)
+        let shift = p - map(p, from: rest, to: grown)
+        let items = place(grown, scales: scales, shift: shift)
+        let half = gap / 2
+        let hovered = items.indices.first { i in
+            items[i].slot.magnifies && abs(p - items[i].center) <= items[i].size / 2 + half
+        }
+        let end = (grown.last?.hi ?? 0) + padding
+        return Layout(items: items, start: shift, end: end + shift, hovered: hovered)
+    }
+
+    /// How far the bar can reach past its rest extent at each end, over every pointer position.
+    public var overflow: (lead: Double, trail: Double) {
+        var lead = 0.0, trail = 0.0
+        var p = -range
+        while p <= restLength + range {
+            let l = layout(pointer: p)
+            lead = max(lead, -l.start)
+            trail = max(trail, l.end - restLength)
+            p += 1
+        }
+        return (lead.rounded(.up), trail.rounded(.up))
+    }
+
+    /// Whether a pointer at (axis, cross) is on the bar. It takes the bar at rest to engage, and
+    /// once engaged the zone grows to cover the magnified icons, so the edge of the zone does not
+    /// flicker as icons grow and shrink. `cross` counts from the screen edge, and `inset` is the
+    /// gap between the screen edge and the bar.
+    public func engages(axis: Double, cross: Double, inset: Double, engaged: Bool) -> Bool {
+        guard cross >= -1 else { return false }
+        if !engaged {
+            return cross <= inset + thickness && axis >= 0 && axis <= restLength
+        }
+        let l = layout(pointer: axis)
+        return cross <= inset + thickness + headroom && axis >= l.start && axis <= l.end
+    }
+
+    private struct Span { var lo: Double, hi: Double }
+
+    private func spans(scales: [Double]) -> [Span] {
+        var x = padding
+        return slots.indices.map { i in
+            let length = baseLength(slots[i]) * scales[i]
+            defer { x += length + gap }
+            return Span(lo: x, hi: x + length)
+        }
+    }
+
+    private func place(_ spans: [Span], scales: [Double], shift: Double) -> [Placement] {
+        slots.indices.map { i in
+            Placement(slot: slots[i], center: (spans[i].lo + spans[i].hi) / 2 + shift, size: spans[i].hi - spans[i].lo, scale: scales[i])
+        }
+    }
+
+    /// Maps a position in one layout to the same relative spot in another: the same fraction
+    /// of the same slot, or the same offset into the same gap.
+    private func map(_ p: Double, from a: [Span], to b: [Span]) -> Double {
+        for i in a.indices {
+            if p < a[i].lo { return i == 0 ? p : b[i - 1].hi + (p - a[i - 1].hi) }
+            if p <= a[i].hi {
+                let length = a[i].hi - a[i].lo
+                return b[i].lo + (length > 0 ? (p - a[i].lo) / length * (b[i].hi - b[i].lo) : 0)
+            }
+        }
+        guard let lastA = a.last, let lastB = b.last else { return p }
+        return lastB.hi + (p - lastA.hi)
+    }
+}

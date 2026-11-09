@@ -1,0 +1,5 @@
+# invariant	expected on the current code	note
+UsedBounded	PASS	
+ModeMatchesTimer	PASS	
+StrictNoGrant	PASS	
+StrictNoEscape	PASS	
