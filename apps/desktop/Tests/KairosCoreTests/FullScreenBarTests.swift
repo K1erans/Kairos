@@ -106,11 +106,80 @@ final class FullScreenBarTests: XCTestCase {
         XCTAssertEqual(a.state, .hidden(armedAt: nil), "back on a desktop with auto-hide, it does not pop out")
     }
 
-    func testTheRuleFollowsTheSettingAndTheSpace() {
-        XCTAssertEqual(DockAutoHide.Rule(autoHide: false, fullScreen: false), .pinned)
-        XCTAssertEqual(DockAutoHide.Rule(autoHide: true, fullScreen: false), .autoHide)
-        XCTAssertEqual(DockAutoHide.Rule(autoHide: false, fullScreen: true), .fullScreen)
-        XCTAssertEqual(DockAutoHide.Rule(autoHide: true, fullScreen: true), .fullScreen)
+    func testTheRuleFollowsBothSettingsAndTheSpace() {
+        typealias R = DockAutoHide.Rule
+        // Auto-hide off, full-screen hiding on: pinned on desktops, hidden in full screen.
+        XCTAssertEqual(R(autoHide: false, hidesInFullScreen: true, fullScreen: false), .pinned)
+        XCTAssertEqual(R(autoHide: false, hidesInFullScreen: true, fullScreen: true), .fullScreen)
+        // Both off: always out, over full-screen apps too.
+        XCTAssertEqual(R(autoHide: false, hidesInFullScreen: false, fullScreen: false), .pinned)
+        XCTAssertEqual(R(autoHide: false, hidesInFullScreen: false, fullScreen: true), .pinned)
+        // Auto-hide on, either way: auto-hide on desktops, hidden in full screen.
+        for hides in [true, false] {
+            XCTAssertEqual(R(autoHide: true, hidesInFullScreen: hides, fullScreen: false), .autoHide)
+            XCTAssertEqual(R(autoHide: true, hidesInFullScreen: hides, fullScreen: true), .fullScreen)
+        }
+    }
+
+    /// Runs the window's loop: an update at every decision time, pointer away.
+    private func idle(_ a: inout DockAutoHide, rule: DockAutoHide.Rule, from start: Double, for seconds: Double) {
+        var now = t0 + start
+        a.update(away, rule: rule, now: now)
+        while let next = a.nextDecision(), next <= t0 + start + seconds, next > now {
+            now = next
+            a.update(away, rule: rule, now: now)
+        }
+        a.update(away, rule: rule, now: t0 + start + seconds)
+    }
+
+    func testPinnedWithFullScreenHidingStaysOnAnEmptyDesktopAndHidesInFullScreen() {
+        func rule(_ fullScreen: Bool) -> DockAutoHide.Rule { .init(autoHide: false, hidesInFullScreen: true, fullScreen: fullScreen) }
+        var a = DockAutoHide(rule: rule(false), now: t0)
+        idle(&a, rule: rule(false), from: 0, for: 60)
+        XCTAssertEqual(a.visible(at: t0 + 60), 1, "a minute on an empty desktop with the pointer away: still out")
+        idle(&a, rule: rule(true), from: 61, for: 10)
+        XCTAssertEqual(a.visible(at: t0 + 71), 0, "gone in the full-screen app")
+        run(&a, [(72, arrive), (72.5, push)], rule: rule(true))
+        XCTAssertTrue(a.isOut, "a second push brings it out there")
+        a.update(away, rule: rule(false), now: t0 + 73)
+        XCTAssertEqual(a.state, .shown(leftAt: nil))
+        XCTAssertEqual(a.visible(at: t0 + 73), 1, "back on the desktop at once, without touching the edge")
+    }
+
+    func testReturningFromFullScreenIsASnapNotASlide() {
+        var a = DockAutoHide(rule: .fullScreen, now: t0)
+        a.update(away, rule: .pinned, now: t0 + 1)
+        XCTAssertFalse(a.isSliding)
+        XCTAssertNil(a.nextDecision(), "nothing animates after the swipe lands")
+    }
+
+    func testBothOffKeepsTheBarOverFullScreenApps() {
+        let rule = DockAutoHide.Rule(autoHide: false, hidesInFullScreen: false, fullScreen: true)
+        var a = DockAutoHide(rule: .pinned, now: t0)
+        idle(&a, rule: rule, from: 0, for: 30)
+        XCTAssertEqual(a.visible(at: t0 + 30), 1)
+    }
+
+    func testAutoHideWithFullScreenHidingOffStillKeepsOutOfFullScreen() {
+        let desktop = DockAutoHide.Rule(autoHide: true, hidesInFullScreen: false, fullScreen: false)
+        let full = DockAutoHide.Rule(autoHide: true, hidesInFullScreen: false, fullScreen: true)
+        var a = DockAutoHide(rule: desktop, now: t0)
+        idle(&a, rule: desktop, from: 0, for: 5)
+        XCTAssertEqual(a.visible(at: t0 + 5), 0, "auto-hide as before on a desktop")
+        run(&a, [(6, rest), (6 + DockAutoHide.revealDelay, rest)], rule: desktop)
+        XCTAssertTrue(a.isOut, "resting on the edge brings it out on a desktop")
+        a.update(away, rule: full, now: t0 + 7)
+        XCTAssertEqual(a.visible(at: t0 + 7), 0)
+        run(&a, [(8, rest), (9, rest)], rule: full)
+        XCTAssertFalse(a.isOut, "resting is not enough in full screen")
+        run(&a, [(9.5, push)], rule: full)
+        XCTAssertTrue(a.isOut, "the second push is")
+    }
+
+    func testFullScreenHidingIsOnForNewAndExistingProfiles() throws {
+        XCTAssertTrue(Settings().hidesInFullScreen)
+        let saved = try DataStore.decoder.decode(Settings.self, from: Data(#"{"autoHideBar": false}"#.utf8))
+        XCTAssertTrue(saved.hidesInFullScreen)
     }
 
     // MARK: Telling a full-screen Space from the window list

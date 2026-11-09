@@ -909,6 +909,14 @@ struct SettingsPage: View {
                 Text("You can also drag the divider on Kairos Bar itself.").font(.callout).foregroundStyle(.secondary)
                 Toggle("Automatically hide and show Kairos Bar", isOn: $model.data.settings.autoHideBar)
                 VStack(alignment: .leading, spacing: 4) {
+                    Toggle("Hide Kairos Bar in full-screen apps", isOn: model.hidesInFullScreenBinding)
+                        .disabled(model.data.settings.autoHideBar)
+                    Text(model.data.settings.autoHideBar
+                         ? "With auto-hide on, Kairos Bar always keeps out of full-screen apps, as the Dock does."
+                         : "Kairos Bar stays on every desktop and keeps out of full-screen apps. Push the pointer against the screen edge twice to bring it out there.")
+                        .font(.callout).foregroundStyle(.secondary)
+                }
+                VStack(alignment: .leading, spacing: 4) {
                     Toggle("Keep windows clear of Kairos Bar", isOn: $model.data.settings.keepsWindowsClear)
                     Text(windowsClearNote).font(.callout).foregroundStyle(axTrusted ? .secondary : Color.orange)
                     if !axTrusted, model.data.settings.keepsWindowsClear {

@@ -252,6 +252,12 @@ final class AppModel: ObservableObject {
         return SetupChecklist(facts)
     }
 
+    /// Auto-hide always keeps Kairos Bar out of full-screen apps, so the switch reads on with it.
+    var hidesInFullScreenBinding: Binding<Bool> {
+        Binding(get: { self.data.settings.autoHideBar || self.data.settings.hidesInFullScreen },
+                set: { self.data.settings.hidesInFullScreen = $0 })
+    }
+
     /// The menu bar menu shows the chosen shortcuts.
     var quickAddShortcut: KeyboardShortcut? { Self.shortcut(Hotkeys.choice(data.settings.quickAddHotkey, in: Hotkeys.quickAdd)) }
     var timerShortcut: KeyboardShortcut? { Self.shortcut(Hotkeys.choice(data.settings.timerHotkey, in: Hotkeys.timer)) }

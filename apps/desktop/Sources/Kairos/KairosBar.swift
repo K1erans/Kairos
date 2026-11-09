@@ -128,7 +128,10 @@ final class DockPanelController {
     private var visibility = DockAutoHide(rule: .pinned, now: Date())
     /// A full-screen app has the active Space on the bar's screen.
     private var fullScreen = false
-    private var rule: DockAutoHide.Rule { .init(autoHide: model.data.settings.autoHideBar, fullScreen: fullScreen) }
+    private var rule: DockAutoHide.Rule {
+        let s = model.data.settings
+        return .init(autoHide: s.autoHideBar, hidesInFullScreen: s.hidesInFullScreen, fullScreen: fullScreen)
+    }
     private let keeper = WindowKeeper()
     private var menuOpen = false
     private var frameTimer: Timer?
@@ -174,7 +177,7 @@ final class DockPanelController {
                 .sink { [weak self] _ in self?.spaceMayHaveChanged() }
                 .store(in: &cancellables)
         }
-        model.$data.map { [$0.settings.autoHideBar, $0.settings.keepsWindowsClear] }.removeDuplicates()
+        model.$data.map { [$0.settings.autoHideBar, $0.settings.hidesInFullScreen, $0.settings.keepsWindowsClear] }.removeDuplicates()
             .sink { [weak self] _ in DispatchQueue.main.async { self?.pointerMoved(); self?.keepWindowsClear() } }
             .store(in: &cancellables)
         // Windows are kept clear of the bar's final size, not every step of a divider drag.
@@ -721,6 +724,8 @@ struct DockView: View {
         Button("Edit Groups…") { DockActions.editGroups(model, nil) }
         Divider()
         Toggle("Automatically Hide and Show", isOn: $model.data.settings.autoHideBar)
+        Toggle("Hide in Full-Screen Apps", isOn: model.hidesInFullScreenBinding)
+            .disabled(model.data.settings.autoHideBar)
         Picker("Position on Screen", selection: $model.data.settings.dockEdge) {
             ForEach(DockEdge.allCases, id: \.self) { Text($0.rawValue.capitalized).tag($0) }
         }

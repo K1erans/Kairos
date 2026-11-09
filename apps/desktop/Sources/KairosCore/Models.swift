@@ -238,6 +238,8 @@ public struct Settings: Codable, Hashable, Sendable {
     public var blockUnshieldedBrowsers: Bool = true
     /// While Kairos Bar is pinned open, move or shrink windows that would sit under it.
     public var keepsWindowsClear: Bool = true
+    /// Hide Kairos Bar while a full-screen app has the Space, even with auto-hide off.
+    public var hidesInFullScreen: Bool = true
 
     public init() {}
 
@@ -268,6 +270,7 @@ extension Settings: Lenient {
         .field("autoHideBar", \.autoHideBar), .field("replacesSystemDock", \.replacesSystemDock),
         .field("blockUnshieldedBrowsers", \.blockUnshieldedBrowsers), .field("startsFocusAfterBreak", \.startsFocusAfterBreak), .field("showsDockFolders", \.showsDockFolders),
         .field("notifiesWhenDue", \.notifiesWhenDue), .field("keepsWindowsClear", \.keepsWindowsClear),
+        .field("hidesInFullScreen", \.hidesInFullScreen),
     ]
 }
 

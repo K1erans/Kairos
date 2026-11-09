@@ -2,9 +2,9 @@ import Foundation
 
 /// When Kairos Bar is on screen, after the macOS Dock. Pinned it is always out. With auto-hide
 /// it slides off its edge shortly after the pointer leaves, and back after the pointer rests on
-/// that screen edge for a moment. While a full-screen app has the Space it is hidden whatever the
-/// setting, and only a second push against the edge brings it out. Pure, so the window only feeds
-/// it the pointer and the Space, and applies `visible(at:)`.
+/// that screen edge for a moment. While a full-screen app has the Space it is hidden, and only a
+/// second push against the edge brings it out. Pure, so the window only feeds it the pointer and
+/// the Space, and applies `visible(at:)`.
 public struct DockAutoHide: Equatable, Sendable {
     public enum State: Equatable, Sendable {
         /// Off screen. `armedAt` is when the pointer reached the edge, or last pushed against it
@@ -19,15 +19,21 @@ public struct DockAutoHide: Equatable, Sendable {
 
     /// What governs the bar on the current Space.
     public enum Rule: Equatable, Sendable {
-        /// Auto-hide is off and the Space is a desktop: always out.
+        /// Always out: auto-hide is off, on a desktop or (with full-screen hiding off) anywhere.
         case pinned
         /// Auto-hide is on and the Space is a desktop.
         case autoHide
-        /// A full-screen app has the Space: hidden whatever the setting, out on a second push.
+        /// A full-screen app has the Space: hidden, out on a second push.
         case fullScreen
 
-        public init(autoHide: Bool, fullScreen: Bool) {
-            self = fullScreen ? .fullScreen : autoHide ? .autoHide : .pinned
+        /// `hidesInFullScreen` is its own setting, so the bar can stay on every desktop and still
+        /// keep out of full-screen apps. Auto-hide always keeps out of them, as the Dock does.
+        public init(autoHide: Bool, hidesInFullScreen: Bool, fullScreen: Bool) {
+            if fullScreen, autoHide || hidesInFullScreen {
+                self = .fullScreen
+            } else {
+                self = autoHide ? .autoHide : .pinned
+            }
         }
     }
 
