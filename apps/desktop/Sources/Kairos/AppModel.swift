@@ -284,6 +284,15 @@ final class AppModel: ObservableObject {
         if data.focus.mode == .off { setMode(.focus) }
     }
 
+    /// "Start" on a task: make it current and, when no timer is running, start a focus session
+    /// on it (asking first if that session is strict). A running timer carries on with this task.
+    func startTask(_ task: TaskItem) {
+        suggestion = nil
+        if let g = task.groupId, g != data.focus.activeGroupId { switchGroup(g) }
+        data.focus.currentTaskId = task.id
+        if tempo.phase == .idle { requestStartFocus() }
+    }
+
     // MARK: Groups and mode
 
     func switchGroup(_ id: UUID) {

@@ -63,11 +63,11 @@ Take the printed steps and walk them through the code, one line per step, using 
 
 ## Coverage and sync
 
-Covered: `OverrideLedger` in `apps/desktop/Sources/KairosCore/Rules.swift`; `TempoEngine.mode`, `use`, `start`, `skip`, `stop`, `tick`, `advance`, `reset`, `resumeStrict` in `Tempo.swift`; `Mode.blocks` and `FocusState.strictUntil` in `Models.swift`; `AppData.recoverAfterLaunch` in `History.swift`; `setMode`, `modeChanged`, `strictLocked`, `startFocus`, `requestStartFocus`, `requestSkip`, `toggleTimer`, `skipPhase`, `stopTimer`, `apply`, `syncFocusFromTempo`, `switchGroup`, `requestOverride` and the launch in `init` in `apps/desktop/Sources/Kairos/AppModel.swift`; the Mode picker, the Quit buttons and `applicationShouldTerminate` in `KairosApp.swift`.
+Covered: `OverrideLedger` in `apps/desktop/Sources/KairosCore/Rules.swift`; `TempoEngine.mode`, `use`, `start`, `skip`, `stop`, `tick`, `advance`, `reset`, `resumeStrict` in `Tempo.swift`; `Mode.blocks` and `FocusState.strictUntil` in `Models.swift`; `AppData.recoverAfterLaunch` in `History.swift`; `setMode`, `modeChanged`, `strictLocked`, `startFocus`, `requestStartFocus`, `requestSkip`, `toggleTimer`, `skipPhase`, `stopTimer`, `apply`, `syncFocusFromTempo`, `switchGroup`, `startTask`, `requestOverride` and the launch in `init` in `apps/desktop/Sources/Kairos/AppModel.swift`; `ModePicker` (the one Mode control, used in the menu bar menu and on Today), the Quit buttons and `applicationShouldTerminate` in `KairosApp.swift`.
 
 `requestStartFocus` and `requestSkip` ask before a strict focus phase starts. Agreeing is the model's `StartFocus` or `Skip`; cancelling changes nothing, so it is no step.
 
-Last confirmed in sync: 2026-11-09, recorded as file checksums in `verification/strict-mode/synced.sha256`, in the commit "Count a termination signal as a force quit in the strict-mode model" (its parent is 6a57093). Write the commit hash here each time you run `--confirm`.
+Last confirmed in sync: 2026-11-09, recorded as file checksums in `verification/strict-mode/synced.sha256`, in the commit "Start the timer from a task and change the mode from Today" (its parent is fedf001). Write the commit hash here each time you run `--confirm`.
 
 ## What this does not cover
 

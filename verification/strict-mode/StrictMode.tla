@@ -62,7 +62,7 @@ Init ==
     /\ up = TRUE /\ downStrict = FALSE /\ quitInStrict = FALSE
     /\ act = "Launch"                                      \* AppData.recoverAfterLaunch: nothing saved, mode off
 
-\* The menu bar Mode picker -> AppModel.setMode
+\* The Mode picker (one ModePicker view, in the menu bar menu and on Today) -> AppModel.setMode
 SetMode(m) ==
     /\ m # mode
     /\ PickerLockedByTimer => phase = "idle"
@@ -72,7 +72,8 @@ SetMode(m) ==
     /\ act' = "SetMode"
     /\ UNCHANGED <<phase, paused, holds, preset, pending, groupStrict>>
 
-\* AppModel.startFocus: tempo.use(group preset), tempo.start(.focus, strict: mode == .strict)
+\* AppModel.startFocus: tempo.use(group preset), tempo.start(.focus, strict: mode == .strict).
+\* "Start" on a task (AppModel.startTask) is SwitchGroup to the task's group, then this.
 StartFocus ==
     /\ phase = "idle"
     /\ preset' = groupStrict /\ pending' = "none"

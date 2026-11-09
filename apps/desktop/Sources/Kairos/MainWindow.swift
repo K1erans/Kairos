@@ -109,7 +109,8 @@ struct TaskRow: View {
                     .padding(.horizontal, 8).padding(.vertical, 3)
                     .background(Color.accentColor.opacity(0.18), in: Capsule())
             } else if task.status == .todo {
-                Button("Start") { model.makeCurrent(task) }.controlSize(.small)
+                Button(model.tempo.phase == .idle ? "Start" : "Work on this") { model.startTask(task) }.controlSize(.small)
+                    .help(model.tempo.phase == .idle ? "Make this the current task and start a focus session" : "Make this the current task")
             }
         }
         .padding(.vertical, 3)
@@ -285,6 +286,11 @@ struct TodayPage: View {
                                 }
                                 if let t = model.currentTask { Button("Done") { model.setDone(t, true) } }
                             }
+                            ModePicker()
+                                .pickerStyle(.segmented)
+                                .fixedSize()
+                                .help(model.tempo.phase == .idle ? "Off, Focus, Break or Strict, without a timer"
+                                                                 : "The timer sets the mode. Stop it to change the mode by hand.")
                             if let next = model.suggestion {
                                 Button { model.makeCurrent(next) } label: { Label("Next up: \(next.title)", systemImage: "sparkles") }
                                     .buttonStyle(.link)

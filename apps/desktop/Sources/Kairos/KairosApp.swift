@@ -114,10 +114,7 @@ struct MenuBarMenu: View {
             ForEach(model.data.groups) { Text($0.name).tag($0.id) }
         }
         Button("New Group…") { DockActions.newGroup(model) }
-        Picker("Mode", selection: Binding(get: { model.mode }, set: { model.setMode($0) })) {
-            ForEach(Mode.allCases, id: \.self) { Text($0.label).tag($0) }
-        }
-        .disabled(model.tempo.phase != .idle)
+        ModePicker()
         Divider()
         Button("Quick add…") { AppDelegate.shared?.showQuickAdd() }.keyboardShortcut(.space, modifiers: .option)
         Button("Open Kairos") {
@@ -139,6 +136,19 @@ struct QuitButton: View {
             Text("Strict until \(until.formatted(date: .omitted, time: .shortened)): Kairos can\u{2019}t be quit")
         }
         Button("Quit Kairos") { NSApp.terminate(nil) }.keyboardShortcut("q").disabled(model.strictLocked)
+    }
+}
+
+/// The one Mode control, in the menu bar menu and on Today. While a timer runs the timer owns
+/// the mode, so the control is locked (StrictMode.tla, PickerLockedByTimer).
+struct ModePicker: View {
+    @EnvironmentObject var model: AppModel
+
+    var body: some View {
+        Picker("Mode", selection: Binding(get: { model.mode }, set: { model.setMode($0) })) {
+            ForEach(Mode.allCases, id: \.self) { Text($0.label).tag($0) }
+        }
+        .disabled(model.tempo.phase != .idle)
     }
 }
 
