@@ -195,29 +195,27 @@ final class DockPanelController {
     /// between displays.
     private var screen: NSScreen? { NSScreen.screens.first }
 
+    /// The menu bar's height on the bar's screen, from the last Space that showed it.
+    private var menuBar = 0.0
+
+    /// Puts the panel where the settings, its size and the screen say, with only the window
+    /// calls that change something. A Space change alone changes nothing (DockPlacement).
     private func layout() {
-        guard model.data.settings.dockVisible, let screen else {
-            panel.orderOut(nil)
-            return
+        var target: CGRect?
+        if model.data.settings.dockVisible, let screen {
+            let f = tracker.frame
+            let top = screen.frame.maxY - screen.visibleFrame.maxY
+            if top > 0 { menuBar = top }
+            target = DockPlacement.frame(edge: f.edge, size: f.size, barMid: f.lead + f.geometry.restLength / 2,
+                                         screen: screen.frame, visible: screen.visibleFrame, menuBar: menuBar)
         }
-        let f = tracker.frame
-        let size = f.size
-        let area = screen.visibleFrame
-        // Centre the bar at rest, not the panel: the room at each end can differ.
-        let barMid = f.lead + f.geometry.restLength / 2
-        var origin: NSPoint
-        switch f.edge {
-        case .left: origin = NSPoint(x: area.minX, y: area.midY + barMid - size.height)
-        case .right: origin = NSPoint(x: area.maxX - size.width, y: area.midY + barMid - size.height)
-        case .bottom: origin = NSPoint(x: area.midX - barMid, y: area.minY)
+        for step in DockPlacement.steps(from: panel.isVisible ? panel.frame : nil, to: target) {
+            switch step {
+            case let .setFrame(frame): panel.setFrame(frame, display: true)
+            case .orderFront: panel.orderFrontRegardless()
+            case .orderOut: panel.orderOut(nil)
+            }
         }
-        if f.edge == .bottom {
-            origin.x = min(max(origin.x, screen.frame.minX), screen.frame.maxX - size.width)
-        } else {
-            origin.y = min(max(origin.y, screen.frame.minY), screen.frame.maxY - size.height)
-        }
-        panel.setFrame(NSRect(origin: origin, size: size), display: true)
-        panel.orderFrontRegardless()
         pointerMoved()
     }
 
