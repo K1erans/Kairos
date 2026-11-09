@@ -48,8 +48,8 @@ public struct SetupChecklist: Sendable {
                               detail: "You chose \(facts.voiceProvider.label) voices for Kairos Read. Until the key is saved it reads with Mac voices."))
         }
         items += [
-            Item(step: .accessibility, done: facts.accessibility, title: "Allow window titles",
-                 detail: "Accessibility lets Jev read the front window\u{2019}s title and lets Kairos switch desktops."),
+            Item(step: .accessibility, done: facts.accessibility, title: "Allow Accessibility",
+                 detail: "Lets Jev read the front window\u{2019}s title, lets Kairos switch desktops, and keeps windows from sitting under Kairos Bar while it stays on screen."),
             Item(step: .openAtLogin, done: facts.openAtLogin, title: "Open Kairos at login",
                  detail: "So blocking and Kairos Bar are there from the moment you log in."),
             Item(step: .dockReplacement, done: facts.replacesDock, title: "Use Kairos Bar instead of the Dock (optional)",

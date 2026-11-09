@@ -129,6 +129,7 @@ final class DockPanelController {
     /// A full-screen app has the active Space on the bar's screen.
     private var fullScreen = false
     private var rule: DockAutoHide.Rule { .init(autoHide: model.data.settings.autoHideBar, fullScreen: fullScreen) }
+    private let keeper = WindowKeeper()
     private var menuOpen = false
     private var frameTimer: Timer?
     private var decisionTimer: Timer?
@@ -173,8 +174,12 @@ final class DockPanelController {
                 .sink { [weak self] _ in self?.spaceMayHaveChanged() }
                 .store(in: &cancellables)
         }
-        model.$data.map(\.settings.autoHideBar).removeDuplicates()
-            .sink { [weak self] _ in DispatchQueue.main.async { self?.pointerMoved() } }
+        model.$data.map { [$0.settings.autoHideBar, $0.settings.keepsWindowsClear] }.removeDuplicates()
+            .sink { [weak self] _ in DispatchQueue.main.async { self?.pointerMoved(); self?.keepWindowsClear() } }
+            .store(in: &cancellables)
+        // Windows are kept clear of the bar's final size, not every step of a divider drag.
+        tracker.$resizing.removeDuplicates().dropFirst()
+            .sink { [weak self] _ in DispatchQueue.main.async { self?.keepWindowsClear() } }
             .store(in: &cancellables)
         // A context menu holds the bar out while it is open.
         for (name, open) in [(NSMenu.didBeginTrackingNotification, true), (NSMenu.didEndTrackingNotification, false)] {
@@ -224,11 +229,27 @@ final class DockPanelController {
             }
         }
         pointerMoved()
+        keepWindowsClear()
+    }
+
+    /// While the bar is pinned open on a desktop, windows are kept from sitting under it
+    /// (WindowKeeper). Never from a scratch copy, which must leave the owner's windows alone.
+    private func keepWindowsClear() {
+        guard !tracker.resizing else { return }
+        guard !DataStore.isScratch, model.data.settings.keepsWindowsClear, rule == .pinned, panel.isVisible,
+              let screen, let primary = NSScreen.screens.first?.frame else { keeper.update(nil); return }
+        // Accessibility measures from the top of the menu bar's screen, downward.
+        func flipped(_ r: CGRect) -> CGRect { CGRect(x: r.minX, y: primary.maxY - r.maxY, width: r.width, height: r.height) }
+        let f = tracker.frame
+        keeper.update(.init(strip: WindowClearance.strip(edge: f.edge, panel: flipped(panel.frame), lead: f.lead,
+                                                         length: f.geometry.restLength, depth: DockFrame.inset + f.geometry.thickness),
+                            edge: f.edge, area: flipped(screen.visibleFrame)))
     }
 
     /// The window list can trail a Space change, so look again shortly after.
     private func spaceMayHaveChanged() {
         refreshFullScreen()
+        keepWindowsClear() // Accessibility may have been allowed since
         for delay in [0.3, 1.0] {
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in self?.refreshFullScreen() }
         }
@@ -240,6 +261,7 @@ final class DockPanelController {
         guard now != fullScreen else { return }
         fullScreen = now
         pointerMoved()
+        keepWindowsClear()
     }
 
     /// From the window list's bounds, which need no permission, and the menu bar (FullScreenSpace).

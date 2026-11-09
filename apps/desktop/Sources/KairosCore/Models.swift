@@ -236,6 +236,8 @@ public struct Settings: Codable, Hashable, Sendable {
     public var startsFocusAfterBreak: Bool = false
     /// In Focus and Strict, hide a browser that Kairos Shield is not running in.
     public var blockUnshieldedBrowsers: Bool = true
+    /// While Kairos Bar is pinned open, move or shrink windows that would sit under it.
+    public var keepsWindowsClear: Bool = true
 
     public init() {}
 
@@ -265,7 +267,7 @@ extension Settings: Lenient {
         .field("groupHotkeys", \.groupHotkeys), .field("quickAddHotkey", \.quickAddHotkey), .field("timerHotkey", \.timerHotkey), .field("voiceProvider", \.voiceProvider), .field("voiceId", \.voiceId),
         .field("autoHideBar", \.autoHideBar), .field("replacesSystemDock", \.replacesSystemDock),
         .field("blockUnshieldedBrowsers", \.blockUnshieldedBrowsers), .field("startsFocusAfterBreak", \.startsFocusAfterBreak), .field("showsDockFolders", \.showsDockFolders),
-        .field("notifiesWhenDue", \.notifiesWhenDue),
+        .field("notifiesWhenDue", \.notifiesWhenDue), .field("keepsWindowsClear", \.keepsWindowsClear),
     ]
 }
 

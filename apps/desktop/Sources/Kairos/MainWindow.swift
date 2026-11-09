@@ -908,6 +908,15 @@ struct SettingsPage: View {
                 Slider(value: $model.data.settings.iconSize, in: 20...64, step: 2) { Text("Icon size: \(Int(model.data.settings.iconSize))") }
                 Text("You can also drag the divider on Kairos Bar itself.").font(.callout).foregroundStyle(.secondary)
                 Toggle("Automatically hide and show Kairos Bar", isOn: $model.data.settings.autoHideBar)
+                VStack(alignment: .leading, spacing: 4) {
+                    Toggle("Keep windows clear of Kairos Bar", isOn: $model.data.settings.keepsWindowsClear)
+                    Text(windowsClearNote).font(.callout).foregroundStyle(axTrusted ? .secondary : Color.orange)
+                    if !axTrusted, model.data.settings.keepsWindowsClear {
+                        Button("Allow Accessibility…") {
+                            _ = AXIsProcessTrustedWithOptions(["AXTrustedCheckOptionPrompt": true] as CFDictionary)
+                        }
+                    }
+                }
                 Toggle("Show Downloads and Trash at the end of Kairos Bar", isOn: $model.data.settings.showsDockFolders)
                 VStack(alignment: .leading, spacing: 4) {
                     Toggle("Use Kairos Bar instead of the macOS Dock", isOn: Binding(
@@ -1015,6 +1024,15 @@ struct SettingsPage: View {
             axTrusted = AXIsProcessTrusted()
             browsers = BridgeInstaller.installedBrowsers()
         }
+    }
+
+    private var windowsClearNote: String {
+        if !axTrusted {
+            return "Off until Kairos has the Accessibility permission: macOS keeps windows clear only of its own Dock, so Kairos needs Accessibility to move them."
+        }
+        return model.data.settings.autoHideBar
+            ? "Only while Kairos Bar stays on screen. With auto-hide on, windows can go under it, as with the Dock."
+            : "Windows that would sit under Kairos Bar are moved or shortened to end at its edge, as macOS does for the Dock. Full-screen windows are left alone."
     }
 
     private func keyRow(_ label: String, has: Bool, text: Binding<String>, account: String) -> some View {
