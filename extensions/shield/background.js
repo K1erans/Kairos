@@ -1,7 +1,7 @@
 // Kairos Shield service worker: holds the focus state, turns it into blocking rules,
 // and relays Jev checks and overrides to Kairos Desktop.
 import { createBridge } from "./lib/bridge.js";
-import { EMPTY_STATE, hostnameOf, normalizeDomain, sanitizeState, siteVerdict } from "./lib/match.js";
+import { EMPTY_STATE, hostnameOf, normalizeDomain, sanitizeState, siteVerdict, strictLockUntil } from "./lib/match.js";
 import {
   JEV_TIMEOUT_MS,
   buildDnrRules,
@@ -88,7 +88,10 @@ async function doApplyState() {
     console.error("Kairos Shield: could not update blocking rules", err);
   }
 
-  const expiry = nextExpiry(state.rules.temporaryAllows);
+  // The earlier of the next temporary allow ending and a strict lock ending, while the lock decides the mode.
+  const lock = connected ? null : strictLockUntil(appState);
+  const expiries = [nextExpiry(state.rules.temporaryAllows), lock].filter((t) => t !== null);
+  const expiry = expiries.length ? Math.min(...expiries) : null;
   if (expiry) chrome.alarms.create(EXPIRY_ALARM, { when: expiry + 500 });
   else chrome.alarms.clear(EXPIRY_ALARM);
 
@@ -286,12 +289,14 @@ async function handle(msg, sender) {
         state,
         connected,
         manualMode,
+        lockedUntil: connected ? null : strictLockUntil(appState),
         host,
         localSelectors: host ? Object.entries(localElements).filter(([d]) => host === d || host.endsWith("." + d)).flatMap(([d, list]) => list.map((selector) => ({ host: d, selector }))) : [],
       };
     }
     case "popup.setMode":
       if (connected) return { ok: false };
+      if (strictLockUntil(appState)) return { ok: false, lockedUntil: strictLockUntil(appState) };
       manualMode = ["off", "focus", "break", "strict"].includes(msg.mode) ? msg.mode : null;
       await chrome.storage.local.set({ manualMode });
       await applyState();

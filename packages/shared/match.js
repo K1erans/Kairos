@@ -83,6 +83,7 @@ export const EMPTY_STATE = Object.freeze({
   currentTask: null,
   endsAt: null,
   overridesLeft: 0,
+  strictUntil: null,
   cloudVoice: null,
   rules: {
     blockSites: [],
@@ -108,6 +109,7 @@ export function sanitizeState(raw) {
     currentTask: s.currentTask && typeof s.currentTask.title === "string" ? s.currentTask : null,
     endsAt: typeof s.endsAt === "number" ? s.endsAt : null,
     overridesLeft: typeof s.overridesLeft === "number" ? s.overridesLeft : 0,
+    strictUntil: typeof s.strictUntil === "number" ? s.strictUntil : null,
     cloudVoice: s.cloudVoice && typeof s.cloudVoice.name === "string" && s.cloudVoice.name ? { provider: String(s.cloudVoice.provider || ""), name: s.cloudVoice.name } : null,
     rules: {
       blockSites: Array.isArray(r.blockSites) ? r.blockSites : [],
@@ -119,6 +121,11 @@ export function sanitizeState(raw) {
       temporaryAllows: r.temporaryAllows && typeof r.temporaryAllows === "object" ? r.temporaryAllows : {},
     },
   };
+}
+
+/** When a locked strict phase ends (ms), or null when no lock is in force at `now`. See "Limits and conventions" in PROTOCOL.md. */
+export function strictLockUntil(state, now = Date.now()) {
+  return state && typeof state.strictUntil === "number" && state.strictUntil > now ? state.strictUntil : null;
 }
 
 export function formatTimeLeft(endsAt, now = Date.now()) {

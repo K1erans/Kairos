@@ -24,6 +24,13 @@ function render() {
   $("warn").hidden = connected;
   $("manualRow").hidden = connected;
   $("manual").value = manualMode || "";
+  const locked = typeof data.lockedUntil === "number" ? data.lockedUntil : null;
+  $("manual").disabled = locked !== null;
+  $("lockNote").hidden = locked === null;
+  if (locked !== null) {
+    const at = new Date(locked).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+    $("lockNote").textContent = `Locked in Strict until ${at}. The mode cannot be changed here until then, even while Kairos Desktop is away.`;
+  }
   const pickable = !!(tab && /^https?:\/\//i.test(tab.url || ""));
   $("pick").disabled = !pickable;
   const list = $("list");

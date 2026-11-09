@@ -79,3 +79,69 @@ test("opening the block page for a site that is not blocked logs nothing", async
   await h.send({ type: "blocked.shown", url: "https://www.youtube.com/watch?v=1" }, { url: "chrome-extension://shield/blocked.html" });
   assert.equal(h.sent("blockEvent").length, 1);
 });
+
+// ---- strict lock ------------------------------------------------------------------------------
+
+const lockedState = (strictUntil, over = {}) => ({ mode: "strict", activeGroupId: "g1", strictUntil, rules: { jevEnabled: true, blockSites: ["youtube.com"] }, ...over });
+const YT = "https://www.youtube.com/watch?v=1";
+
+test("a locked strict phase keeps being enforced when the app disconnects, and the popup cannot switch it off", async (t) => {
+  const until = Date.now() + 10 * 60_000;
+  const state = { current: lockedState(until) };
+  const h = await startShield({ app: fakeApp(() => state.current) });
+  t.after(() => h.dispose());
+  await h.drop();
+  const refused = await h.send({ type: "popup.setMode", mode: "off" });
+  assert.equal(refused.ok, false);
+  assert.equal(refused.lockedUntil, until);
+  const popup = await h.send({ type: "popup.get", url: YT });
+  assert.equal(popup.state.mode, "strict");
+  assert.equal(popup.lockedUntil, until);
+  assert.equal(h.dnr.rules.length > 0, true, "blocking rules stay installed");
+  assert.equal((await h.send({ type: "page.query", url: YT })).verdict, "blocked");
+});
+
+test("a manual mode saved before the lock began does not override it", async (t) => {
+  const until = Date.now() + 10 * 60_000;
+  const h = await startShield({ storage: { local: { state: lockedState(until), manualMode: "off" } } });
+  t.after(() => h.dispose());
+  const popup = await h.send({ type: "popup.get", url: YT });
+  assert.equal(popup.state.mode, "strict");
+  assert.equal((await h.send({ type: "page.query", url: YT })).verdict, "blocked");
+});
+
+test("the lock survives a worker restart while the app is away", async (t) => {
+  const until = Date.now() + 10 * 60_000;
+  const h = await startShield({ storage: { local: { state: lockedState(until) } } });
+  t.after(() => h.dispose());
+  assert.equal((await h.send({ type: "popup.setMode", mode: "break" })).ok, false);
+  assert.equal((await h.send({ type: "page.query", url: YT })).verdict, "blocked");
+});
+
+test("a lock reported with a looser last mode still enforces strict while disconnected", async (t) => {
+  const until = Date.now() + 10 * 60_000;
+  const h = await startShield({ storage: { local: { state: lockedState(until, { mode: "focus" }) } } });
+  t.after(() => h.dispose());
+  const info = await h.send({ type: "page.query", url: YT });
+  assert.equal(info.mode, "strict");
+  assert.equal(info.canOverride, false);
+});
+
+test("once the lock time has passed the popup may switch modes again", async (t) => {
+  const h = await startShield({ storage: { local: { state: lockedState(Date.now() - 1000) } } });
+  t.after(() => h.dispose());
+  assert.equal((await h.send({ type: "popup.get", url: YT })).lockedUntil, null);
+  assert.equal((await h.send({ type: "popup.setMode", mode: "off" })).ok, true);
+  assert.equal((await h.send({ type: "page.query", url: YT })).verdict, "off");
+});
+
+test("the app clearing strictUntil releases the lock after a reconnect", async (t) => {
+  const state = { current: lockedState(Date.now() + 10 * 60_000) };
+  const h = await startShield({ app: fakeApp(() => state.current) });
+  t.after(() => h.dispose());
+  await h.drop();
+  state.current = lockedState(null, { mode: "focus" });
+  await h.reconnect(fakeApp(() => state.current));
+  await h.drop();
+  assert.equal((await h.send({ type: "popup.setMode", mode: "off" })).ok, true);
+});

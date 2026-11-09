@@ -9,6 +9,7 @@ import {
   normalizeDomain,
   matchesAny,
   siteVerdict,
+  strictLockUntil,
 } from "./match.js";
 
 export const RULE_ID_BLOCK = 1;
@@ -104,7 +105,11 @@ export function pruneAllows(allows, now = Date.now()) {
   return out;
 }
 
-/** State as the extension enforces it: manual mode when the app is away, local allows merged in. */
+/**
+ * State as the extension enforces it: local allows merged in, and while the app is away the manual
+ * mode, unless the last state it sent holds a locked strict phase (strictUntil in the future),
+ * which stays strict whatever was chosen.
+ */
 export function effectiveState(state, { connected, manualMode, localAllows, now = Date.now() }) {
   const merged = { ...pruneAllows(state.rules.temporaryAllows, now) };
   for (const [host, until] of Object.entries(pruneAllows(localAllows, now))) {
@@ -112,7 +117,7 @@ export function effectiveState(state, { connected, manualMode, localAllows, now 
   }
   return {
     ...state,
-    mode: !connected && manualMode ? manualMode : state.mode,
+    mode: connected ? state.mode : strictLockUntil(state, now) ? "strict" : manualMode || state.mode,
     rules: { ...state.rules, temporaryAllows: merged },
   };
 }
