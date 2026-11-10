@@ -6,10 +6,14 @@ final class FakeDock: CommandRunner {
     var domain: [String: (type: String, text: String)] = [:]
     var restarts = 0
     var log: [[String]] = []
+    /// Stands in for the restore script, which the fake never executes.
+    var onScript: (() -> Void)?
+    var scriptRuns = 0
 
     func run(_ tool: String, _ arguments: [String]) -> (status: Int32, output: String) {
         log.append([tool] + arguments)
         if tool.hasSuffix("/killall") { restarts += 1; return (0, "") }
+        if tool == "/bin/sh" { scriptRuns += 1; onScript?(); return (0, "") }
         XCTAssertTrue(tool.hasSuffix("/defaults"), tool)
         XCTAssertEqual(arguments[1], SystemDock.domain, "only the Dock's domain is touched")
         let key = arguments[2]
@@ -96,5 +100,47 @@ final class SystemDockTests: XCTestCase {
         XCTAssertTrue(s.hidesSystemDock)
         s.dockVisible = false
         XCTAssertFalse(s.hidesSystemDock, "hiding Kairos Bar brings the Dock back")
+    }
+
+    // Found by verification/system-dock: Crash, PrefsLost, Launch used to record Kairos's own
+    // hidden setting as the owner's.
+    func testLostMemoryWithAScriptLeftRunsItInsteadOfRecordingTheHiddenDock() throws {
+        let script = FileManager.default.temporaryDirectory.appendingPathComponent("kairos-dock-\(UUID().uuidString).sh")
+        defer { try? FileManager.default.removeItem(at: script) }
+        let dock = FakeDock()
+        dock.domain = ["autohide": ("boolean", "0")]
+        SystemDock(commands: dock, memory: memory, restoreScript: script).replace()
+        memory.removeObject(forKey: "systemDockSaved")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: script.path))
+        dock.onScript = { dock.domain = ["autohide": ("boolean", "0")] }
+
+        let relaunched = SystemDock(commands: dock, memory: memory, restoreScript: script)
+        relaunched.replace()
+        XCTAssertEqual(dock.scriptRuns, 1)
+        XCTAssertEqual(dock.value("autohide-delay"), "float:1000")
+        relaunched.restore()
+        XCTAssertEqual(dock.value("autohide"), "boolean:0")
+        XCTAssertNil(dock.value("autohide-delay"))
+    }
+
+    func testRestoreWithLostMemoryRunsTheScriptLeftOnDisk() {
+        let script = FileManager.default.temporaryDirectory.appendingPathComponent("kairos-dock-\(UUID().uuidString).sh")
+        defer { try? FileManager.default.removeItem(at: script) }
+        let dock = FakeDock()
+        SystemDock(commands: dock, memory: memory, restoreScript: script).replace()
+        memory.removeObject(forKey: "systemDockSaved")
+        SystemDock(commands: dock, memory: memory, restoreScript: script).restore()
+        XCTAssertEqual(dock.scriptRuns, 1)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: script.path))
+    }
+
+    func testKairossOwnHiddenSettingIsNeverRecordedAsTheOwners() {
+        let dock = FakeDock()
+        dock.domain = ["autohide": ("boolean", "1"), "autohide-delay": ("float", "1000")]
+        let system = SystemDock(commands: dock, memory: memory)
+        system.replace()
+        system.restore()
+        XCTAssertNil(dock.value("autohide"), "back to the macOS default, a Dock that stays on screen")
+        XCTAssertNil(dock.value("autohide-delay"))
     }
 }

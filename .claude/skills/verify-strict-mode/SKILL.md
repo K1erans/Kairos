@@ -84,3 +84,7 @@ Last confirmed in sync: 2026-11-10, recorded as file checksums in `verification/
 - Quit and relaunch: a paused strict phase resumes running at launch, with its saved end (the time it would have ended if resumed at the last save); the model treats paused and running alike there.
 - Rules are one bit per step: an edit or a switch is looser or it is not. Which edits count as looser is `RuleLock.loosens`, tested in `RuleLockTests`. The privacy list "Never send off this Mac" (Settings) also stops Jev from checking a site; it is a privacy setting and stays editable in Strict.
 - Left out: the Chrome extensions' own handling of the pushed state (they keep enforcing until `strictUntil` while Kairos is closed), app blocking and Jev, and the reason text on an override.
+
+## The Dock takeover has its own model
+
+`verification/system-dock/` checks `SystemDock` and `DockWatchdog` (hide the macOS Dock, put back exactly what was there) over every order of launch, switch, quit, crash, lost preferences, owner edits and watchdog runs. Run `verification/system-dock/check.sh --mutants` after editing `apps/desktop/Sources/KairosCore/SystemDock.swift` or the Dock sinks and quit paths in `KairosApp.swift`. It found, on 2026-11-10, that losing the saved values while the Dock was hidden made Kairos record its own hidden setting as the owner's (Crash, PrefsLost, Launch) and made switching the replacement off leave the Dock hidden; `replace()` and `restore()` now run a leftover restore script first, and `replace()` never records the hidden setting.

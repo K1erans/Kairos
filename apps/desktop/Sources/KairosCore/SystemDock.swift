@@ -74,11 +74,18 @@ public struct SystemDock {
             writeRestoreScript(saved)
             return
         }
+        // Nothing remembered, yet a restore script is still there: the Dock is hidden from a
+        // run whose memory was lost. Put it back first, so what is read below is the owner's.
+        recover()
         // key -> [type, value] as `defaults` reports them; a key the user never set is left out.
         var values: [String: [String]] = [:]
         for key in Self.keys {
             if let value = read(key) { values[key] = [value.type, value.text] }
         }
+        // Kairos's own hidden setting is never recorded as the owner's: restoring it would leave
+        // the Mac with no Dock. With nothing better known, restore will clear both keys, which
+        // is the macOS default of a Dock that stays on screen.
+        if values["autohide-delay"].flatMap({ Double($0[1]) }) == Double(Self.hiddenDelay) { values = [:] }
         memory.set(values, forKey: Self.savedKey)
         // Before the Dock goes, so there is never a hidden Dock without a way back.
         writeRestoreScript(values)
@@ -88,11 +95,19 @@ public struct SystemDock {
     }
 
     public func restore() {
-        guard let saved else { return }
+        guard let saved else { recover(); return }
         for arguments in Self.restoreArguments(saved) { defaults(arguments) }
         memory.removeObject(forKey: Self.savedKey)
         if let restoreScript { try? FileManager.default.removeItem(at: restoreScript) }
         restartDock()
+    }
+
+    /// With nothing remembered but a restore script left on disk, runs it: it holds the
+    /// owner's values, puts them back, clears the memory and removes itself.
+    private func recover() {
+        guard saved == nil, let restoreScript, FileManager.default.fileExists(atPath: restoreScript.path) else { return }
+        commands.run("/bin/sh", [restoreScript.path])
+        try? FileManager.default.removeItem(at: restoreScript)
     }
 
     /// The `defaults` calls that put back what `saved` holds, deleting what the user never set.
