@@ -115,8 +115,10 @@ scripts/snapshot.sh /tmp/kairos     # renders every screen and Kairos Bar state 
 ```
 
 `bridge-check.py` and `snapshot.sh` run Kairos against a scratch profile (`KAIROS_HOME`), so they
-never touch your data, your browser manifests or the Dock. `bridge-check.py` works from any
-directory and checks `apps/desktop/build/Kairos.app` unless given another path.
+never touch your data, your browser manifests, the Dock, your Keychain or Notification Center.
+`bridge-check.py` runs a copy of the app made by `scripts/scratch-copy.sh` under its own bundle id,
+so the window sizes it saves never land in your Kairos settings. It works from any directory and
+checks `apps/desktop/build/Kairos.app` unless given another path.
 
 Kairos keeps its data in `~/Library/Application Support/Kairos/kairos.json`. Set `KAIROS_HOME` to
 another folder to run a separate copy with its own data and socket.

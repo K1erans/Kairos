@@ -3,13 +3,20 @@
 profile (KAIROS_HOME), and checks the bridge end to end. Never touches the real profile.
 
 Usage: scripts/bridge-check.py [path/to/Kairos.app]
-The default is apps/desktop/build/Kairos.app, whatever directory it is run from.
+The default is apps/desktop/build/Kairos.app, whatever directory it is run from. It runs a copy of
+that app with its own bundle id (scripts/scratch-copy.sh), so nothing lands in the owner's defaults.
 """
 import json, os, socket, struct, subprocess, sys, tempfile, threading, time, uuid
 
-DEFAULT_APP = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "build", "Kairos.app")
-APP = os.path.abspath(sys.argv[1] if len(sys.argv) > 1 else DEFAULT_APP)
+SCRIPTS = os.path.dirname(os.path.abspath(__file__))
+DEFAULT_APP = os.path.join(SCRIPTS, "..", "build", "Kairos.app")
+SOURCE = os.path.abspath(sys.argv[1] if len(sys.argv) > 1 else DEFAULT_APP)
 HOME = tempfile.mkdtemp(prefix="kairos-check-")
+# The checks run a copy under its own bundle id (com.kairos.desktop.scratch): the window it opens
+# saves its frame to UserDefaults, which must never be the owner's com.kairos.desktop.
+APP = os.path.join(HOME, "Kairos.app")
+subprocess.run([os.path.join(SCRIPTS, "scratch-copy.sh"), SOURCE, APP], check=True,
+               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 SOCK = os.path.join(HOME, "bridge.sock")
 DATA = os.path.join(HOME, "kairos.json")
 ENV = dict(os.environ, KAIROS_HOME=HOME, KAIROS_START_FOCUS="1")
