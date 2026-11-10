@@ -11,7 +11,8 @@ JAR_URL="https://github.com/tlaplus/tlaplus/releases/download/v1.7.4/tla2tools.j
 JAR_SHA="936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88"
 COVERED=(apps/desktop/Sources/KairosCore/Rules.swift apps/desktop/Sources/KairosCore/Tempo.swift
          apps/desktop/Sources/KairosCore/Models.swift apps/desktop/Sources/KairosCore/History.swift
-         apps/desktop/Sources/Kairos/AppModel.swift apps/desktop/Sources/Kairos/KairosApp.swift)
+         apps/desktop/Sources/Kairos/AppModel.swift apps/desktop/Sources/Kairos/KairosApp.swift
+         apps/desktop/Sources/Kairos/KairosBar.swift)
 
 hashes() { (cd "$ROOT" && shasum -a 256 "${COVERED[@]}"); }
 

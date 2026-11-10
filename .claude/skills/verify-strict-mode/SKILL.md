@@ -73,9 +73,11 @@ Take the printed steps and walk them through the code, one line per step, using 
 
 Covered: `OverrideLedger`, `RuleLock`, `AppData.updateGroup`, `addSite`, `setAppBlocked` and `setElementHidden` in `apps/desktop/Sources/KairosCore/Rules.swift`; `TempoEngine.mode`, `use`, `start`, `skip`, `stop`, `tick`, `advance` (including the wait after a break), `endWait`, `reset`, `resumeStrict` in `Tempo.swift`; `Mode.blocks` and `FocusState.strictUntil` in `Models.swift`; `AppData.recoverAfterLaunch` in `History.swift`; `setMode`, `modeChanged`, `strictLocked`, `startFocus`, `requestStartFocus`, `requestSkip`, `toggleTimer`, `skipPhase`, `stopTimer`, `apply`, `syncFocusFromTempo`, `switchGroup`, `startTask`, `importData` (idle only), `requestOverride`, `groupBinding`, `setAppBlocked`, the `rule.*` bridge messages and the launch in `init` in `apps/desktop/Sources/Kairos/AppModel.swift`; `ModePicker` (the one Mode control, used in the menu bar menu and on Today), the Quit buttons and `applicationShouldTerminate` in `KairosApp.swift`.
 
+Watched but not modelled, because none of it changes the mode, the timer, the overrides or a group's rules: `apps/desktop/Sources/Kairos/KairosBar.swift`. Dragging a group along Kairos Bar writes `model.data.groups` directly (a reorder of the same groups), and dragging an app calls `addDockApp`, `removeDockApp` and `moveDockApp`, which only change which apps are pinned. It is in `check.sh`'s covered files so an edit there raises the `NOTE`: a write to `data.groups` in that file that changes a rule would skip `updateGroup` and the rule lock.
+
 `requestStartFocus` and `requestSkip` ask before a strict focus phase starts. Agreeing is the model's `StartFocus` or `Skip`; cancelling changes nothing, so it is no step.
 
-Last confirmed in sync: 2026-11-10, recorded as file checksums in `verification/strict-mode/synced.sha256`, in the commit "Write 3D scenes on the Claude subscription by default, and let Read cancel them" (its parent is c01e6bd). Write the commit hash here each time you run `--confirm`.
+Last confirmed in sync: 2026-11-10, at commit 12c70d3 "Detect full screen from the window server's Space type", recorded as file checksums in `verification/strict-mode/synced.sha256`. Read between 6ce6322 and 12c70d3: the drags on Kairos Bar and `moveDockApp(_:to:)` (pinned apps and group order only), and the "Hide the apps that group blocks" switch option (`SwitchBehavior.hideBlocked`, `GroupSwitch.plan(only:)`, the hiding at the end of `switchGroup`). None changes what the model describes, so the model and the properties are unchanged. Write the commit hash here each time you run `--confirm`.
 
 ## What this does not cover
 
@@ -83,8 +85,33 @@ Last confirmed in sync: 2026-11-10, recorded as file checksums in `verification/
 - Bounds: `Max = 3` overrides. Short and long breaks are one phase. Grant expiry is "at some point", not five minutes.
 - Quit and relaunch: a paused strict phase resumes running at launch, with its saved end (the time it would have ended if resumed at the last save); the model treats paused and running alike there.
 - Rules are one bit per step: an edit or a switch is looser or it is not. Which edits count as looser is `RuleLock.loosens`, tested in `RuleLockTests`. The privacy list "Never send off this Mac" (Settings) also stops Jev from checking a site; it is a privacy setting and stays editable in Strict.
+- Hiding apps on a group switch (`SwitchBehavior`, `GroupSwitch.plan`) is left out. Returning to a group un-hides the apps hidden when it was left; an app that group blocks is hidden again by the app guard's sweep, which is not modelled.
 - Left out: the Chrome extensions' own handling of the pushed state (they keep enforcing until `strictUntil` while Kairos is closed), app blocking and Jev, and the reason text on an override.
 
 ## The Dock takeover has its own model
 
-`verification/system-dock/` checks `SystemDock` and `DockWatchdog` (hide the macOS Dock, put back exactly what was there) over every order of launch, switch, quit, crash, lost preferences, owner edits and watchdog runs. Run `verification/system-dock/check.sh --mutants` after editing `apps/desktop/Sources/KairosCore/SystemDock.swift` or the Dock sinks and quit paths in `KairosApp.swift`. It found, on 2026-11-10, that losing the saved values while the Dock was hidden made Kairos record its own hidden setting as the owner's (Crash, PrefsLost, Launch) and made switching the replacement off leave the Dock hidden; `replace()` and `restore()` now run a leftover restore script first, and `replace()` never records the hidden setting.
+Kairos hides the macOS Dock and promises to put back exactly what was there. `verification/system-dock/SystemDock.tla` checks `SystemDock` and `DockWatchdog` (`apps/desktop/Sources/KairosCore/SystemDock.swift`) and the two Dock sinks and the quit paths in `KairosApp.swift`, over every order of launch, switching the replacement on and off, hiding the bar, quit, crash, lost preferences, the owner changing the Dock, and the watchdog's check and run as two steps.
+
+| Property | In plain words | Harm if broken |
+| --- | --- | --- |
+| `NeverSavesOwn` | Kairos never records its own hidden setting as the owner's. | "Restore" leaves the Mac with no Dock for good. |
+| `WayBack` | While the Dock is in Kairos's hidden setting, the restore script on disk holds a real setting. | A crash leaves nothing to put the Dock back with. |
+| `WatchdogCovers` | A hidden Dock with Kairos stopped always has the watchdog installed. | The Dock stays hidden until Kairos is opened again. |
+| `BackWhenNotReplacing` | With the bar hidden or the switch off while Kairos runs, the Dock is back. | No Dock and no Kairos Bar. |
+
+```
+verification/system-dock/check.sh --mutants   # about 15 seconds; needs strict-mode/check.sh to have downloaded TLC
+```
+
+All four hold. `--mutants` reruns them with each fix switched off (`RecoversFromScript`, `RefusesOwnValues`), and they must fail. A `NOTE` means `SystemDock.swift` or `KairosApp.swift` changed: read `replace()`, `restore()`, `recover()`, the watchdog and the sinks against the model, then run `check.sh --confirm`.
+
+Found and fixed on 2026-11-10 (commit 4d36cb8). Both start with the saved values lost while the Dock is hidden (preferences reset, or never written before a crash):
+
+- Crash, PrefsLost, Launch: `replace()` read the hidden Dock and recorded it as the owner's, overwriting the script too.
+- PrefsLost, switch the replacement off: `restore()` did nothing, the watchdog was removed, and the Dock stayed hidden.
+
+`replace()` and `restore()` now run a restore script left on disk first (`recover()`), and `replace()` never records `autohide-delay` 1000.
+
+Last confirmed in sync: 2026-11-10, at commit 12c70d3, recorded in `verification/system-dock/synced.sha256`.
+
+Not covered: the restore script being deleted while the Dock is hidden (Kairos then holds the only copy until it next runs `replace()`), a second display, the real timing of `defaults` and `killall Dock`, and whether `launchctl` loaded the watchdog.
