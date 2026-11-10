@@ -16,7 +16,8 @@ public final class DataStore {
     }
 
     /// A scratch copy (`KAIROS_HOME` set, as the checks and snapshot tool do) must leave the rest
-    /// of the Mac alone: the browsers' native messaging manifests, the login item, the Dock.
+    /// of the Mac alone: the browsers' native messaging manifests, the login item, the Dock, the
+    /// Keychain (KeyStore), Notification Center, and other apps' windows.
     public static var isScratch: Bool {
         !(ProcessInfo.processInfo.environment["KAIROS_HOME"] ?? "").isEmpty
     }

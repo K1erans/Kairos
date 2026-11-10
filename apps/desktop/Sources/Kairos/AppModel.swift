@@ -115,9 +115,10 @@ final class AppModel: ObservableObject {
         refreshRunning()
         saveNow() // keeps what launch recovery logged
         if mode.blocks { sweepSoon() } // a strict phase resumed after a quit
-        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
-        // A scratch copy (bridge-check) must not put its tasks in the owner's Notification Center.
+        // A scratch copy (bridge-check) must not put its tasks in the owner's Notification Center,
+        // nor ask for it: it has the same bundle id as the owner's Kairos.
         guard !DataStore.isScratch else { return }
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
         reminders = $data.map(DueReminders.Inputs.init).removeDuplicates()
             .debounce(for: .seconds(1), scheduler: RunLoop.main)
             .sink { [weak self] _ in self?.scheduleDueReminders() }
@@ -575,6 +576,7 @@ final class AppModel: ObservableObject {
     }
 
     private func notify(_ title: String, body: String) {
+        guard !DataStore.isScratch else { return }
         let content = UNMutableNotificationContent()
         content.title = title
         content.body = body
