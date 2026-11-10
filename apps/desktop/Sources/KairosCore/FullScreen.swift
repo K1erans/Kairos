@@ -41,4 +41,19 @@ public enum FullScreenSpace {
                 && $0.bounds.intersection(display).width >= display.width / 2
         }
     }
+
+    /// The window server's own answer, when it gives one: whether the Space showing on a display
+    /// is a full-screen (or tiled) one. `managed` is its list of displays, each with a "Display
+    /// Identifier" (the display's UUID, or "Main" when displays share Spaces) and a "Current
+    /// Space" whose "type" is 4 for full screen. Nil when the display or the type is missing,
+    /// and the caller falls back to `detect`. This catches what `detect` cannot: a full-screen
+    /// app on a Mac set to keep the menu bar showing in full screen.
+    public static func managedSpaceIsFullScreen(_ managed: [[String: Any]], display uuid: String) -> Bool? {
+        let entry = managed.first { ($0["Display Identifier"] as? String)?.caseInsensitiveCompare(uuid) == .orderedSame }
+            ?? (managed.count == 1 ? managed.first : managed.first { $0["Display Identifier"] as? String == "Main" })
+        guard let space = entry?["Current Space"] as? [String: Any], let type = space["type"] as? Int else { return nil }
+        return type == fullScreenSpaceType
+    }
+
+    public static let fullScreenSpaceType = 4
 }

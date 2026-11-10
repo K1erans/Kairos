@@ -247,4 +247,19 @@ final class FullScreenBarTests: XCTestCase {
         let other = FullScreenSpace.Window(layer: 0, bounds: CGRect(x: 1470, y: 0, width: 1920, height: 1080))
         XCTAssertFalse(FullScreenSpace.detect(windows: [other], display: display, topInset: 32, visibleReachesTop: true))
     }
+
+    // The owner's Mac keeps the menu bar showing in full screen, which the window list cannot
+    // tell from a zoomed window; the window server's Space type can.
+    func testTheWindowServersSpaceTypeDecidesWhenItIsKnown() {
+        let id = "37D8832A-2D66-02CA-B9F7-8F30A301B230"
+        func managed(_ type: Any?) -> [[String: Any]] {
+            [["Display Identifier": "OTHER", "Current Space": ["type": 0]],
+             ["Display Identifier": id, "Current Space": type.map { ["type": $0] } ?? [:]]]
+        }
+        XCTAssertEqual(FullScreenSpace.managedSpaceIsFullScreen(managed(4), display: id.lowercased()), true)
+        XCTAssertEqual(FullScreenSpace.managedSpaceIsFullScreen(managed(0), display: id), false)
+        XCTAssertNil(FullScreenSpace.managedSpaceIsFullScreen(managed(nil), display: id))
+        XCTAssertNil(FullScreenSpace.managedSpaceIsFullScreen(managed(4), display: "missing"))
+        XCTAssertEqual(FullScreenSpace.managedSpaceIsFullScreen([["Display Identifier": "Main", "Current Space": ["type": 4]]], display: id), true)
+    }
 }

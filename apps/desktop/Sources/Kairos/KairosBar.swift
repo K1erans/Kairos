@@ -345,8 +345,24 @@ final class DockPanelController {
         keepWindowsClear()
     }
 
+    /// Asks the window server which kind of Space the display shows. Not a public call, so it
+    /// is looked up by name; nil when it is missing or answers in a shape not understood.
+    private static func managedSpaceIsFullScreen(on screen: NSScreen) -> Bool? {
+        typealias Connection = @convention(c) () -> Int32
+        typealias CopySpaces = @convention(c) (Int32) -> Unmanaged<CFArray>?
+        guard let id = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber,
+              let uuid = CGDisplayCreateUUIDFromDisplayID(id.uint32Value)?.takeRetainedValue(),
+              let lib = dlopen(nil, RTLD_NOW), let connection = dlsym(lib, "CGSMainConnectionID"),
+              let copy = dlsym(lib, "CGSCopyManagedDisplaySpaces"),
+              let managed = unsafeBitCast(copy, to: CopySpaces.self)(unsafeBitCast(connection, to: Connection.self)())?
+                  .takeRetainedValue() as? [[String: Any]]
+        else { return nil }
+        return FullScreenSpace.managedSpaceIsFullScreen(managed, display: CFUUIDCreateString(nil, uuid) as String)
+    }
+
     /// From the window list's bounds, which need no permission, and the menu bar (FullScreenSpace).
     private static func fullScreen(on screen: NSScreen) -> Bool {
+        if let known = managedSpaceIsFullScreen(on: screen) { return known }
         guard let id = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber,
               let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]]
         else { return false }
