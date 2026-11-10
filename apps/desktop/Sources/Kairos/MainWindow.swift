@@ -905,6 +905,9 @@ struct SettingsPage: View {
                 Picker("Screen edge", selection: $model.data.settings.dockEdge) {
                     ForEach(DockEdge.allCases, id: \.self) { Text($0.rawValue.capitalized).tag($0) }
                 }
+                Picker("Appearance", selection: $model.data.settings.barAppearance) {
+                    ForEach(BarAppearance.allCases, id: \.self) { Text($0.label).tag($0) }
+                }
                 Slider(value: $model.data.settings.iconSize, in: 20...64, step: 2) { Text("Icon size: \(Int(model.data.settings.iconSize))") }
                 Text("You can also drag the divider on Kairos Bar itself.").font(.callout).foregroundStyle(.secondary)
                 Toggle("Automatically hide and show Kairos Bar", isOn: $model.data.settings.autoHideBar)

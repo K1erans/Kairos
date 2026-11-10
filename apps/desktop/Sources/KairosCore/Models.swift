@@ -202,6 +202,15 @@ extension TempoPreset: Lenient {
 
 public enum DockEdge: String, Codable, CaseIterable, Sendable { case left, right, bottom }
 
+/// What Kairos Bar is drawn on.
+public enum BarAppearance: String, Codable, CaseIterable, Sendable {
+    /// Near-black with a faint rim, measured from the macOS Dock in the dark appearance.
+    case dark
+    case glass
+
+    public var label: String { self == .dark ? "Dark (like the Dock)" : "Liquid Glass" }
+}
+
 public struct Settings: Codable, Hashable, Sendable {
     public var dockEdge: DockEdge = .left
     public var dockVisible: Bool = true
@@ -240,6 +249,7 @@ public struct Settings: Codable, Hashable, Sendable {
     public var keepsWindowsClear: Bool = true
     /// Hide Kairos Bar while a full-screen app has the Space, even with auto-hide off.
     public var hidesInFullScreen: Bool = true
+    public var barAppearance: BarAppearance = .dark
 
     public init() {}
 
@@ -270,7 +280,7 @@ extension Settings: Lenient {
         .field("autoHideBar", \.autoHideBar), .field("replacesSystemDock", \.replacesSystemDock),
         .field("blockUnshieldedBrowsers", \.blockUnshieldedBrowsers), .field("startsFocusAfterBreak", \.startsFocusAfterBreak), .field("showsDockFolders", \.showsDockFolders),
         .field("notifiesWhenDue", \.notifiesWhenDue), .field("keepsWindowsClear", \.keepsWindowsClear),
-        .field("hidesInFullScreen", \.hidesInFullScreen),
+        .field("hidesInFullScreen", \.hidesInFullScreen), .field("barAppearance", \.barAppearance),
     ]
 }
 

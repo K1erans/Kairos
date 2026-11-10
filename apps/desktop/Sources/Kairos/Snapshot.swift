@@ -108,10 +108,20 @@ enum Snapshot {
         // Open apps: running dots, and an app that is not in the group after a separator.
         model.showRunningForSnapshot(["com.apple.Safari", "com.apple.Notes", "com.hnc.Discord"])
         dock("left-36-running")
-        dock("left-36-running-light-glass", surface: .lightGlassStandIn)
         model.data.settings.dockEdge = .bottom
+        dock("bottom-36-running")
+        // The owner's bar: bottom edge, 24 pt icons, apps open, Dark (the default) and Liquid Glass.
+        model.data.settings.iconSize = 24
+        dock("bottom-24-running")
+        dock("bottom-24-running-hover-app", pointer: .app("com.apple.Safari"))
+        model.data.settings.barAppearance = .glass
+        dock("bottom-24-running-glass")
+        model.data.settings.iconSize = 36
         dock("bottom-36-running-light-glass", surface: .lightGlassStandIn)
         model.data.settings.dockEdge = .left
+        dock("left-36-running-glass")
+        dock("left-36-running-light-glass", surface: .lightGlassStandIn)
+        model.data.settings.barAppearance = .dark
         dock("left-36-hover-trash", pointer: .folder(.trash))
         dock("left-36-launching", launching: "com.apple.iCal")
         // Reduce motion: no magnification under the pointer, and auto-hide fades instead of sliding.

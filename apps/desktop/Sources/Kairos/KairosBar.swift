@@ -409,9 +409,20 @@ final class DockPanelController {
     }
 }
 
-/// What Kairos Bar is drawn on. Liquid Glass does not render in the snapshot tool, so it draws
-/// the material, or a light stand-in for glass in the light appearance.
-enum DockSurface { case glass, material, lightGlassStandIn }
+/// What Kairos Bar is drawn on: the Dock's near-black, or Liquid Glass. Liquid Glass does not
+/// render in the snapshot tool, so it draws the material, or a light stand-in for glass in the
+/// light appearance.
+enum DockSurface { case dark, glass, material, lightGlassStandIn }
+
+/// The macOS Dock's colours in the dark appearance, read from a screenshot of the owner's Dock.
+enum DockInk {
+    static let fill = Color(white: 12 / 255)
+    /// The rim on the bar's horizontal edges; its vertical edges have almost none.
+    static let rimLit = Color(white: 58 / 255)
+    static let rim = Color(white: 22 / 255)
+    static let separator = Color(white: 95 / 255)
+    static let dot = Color(white: 153 / 255)
+}
 
 private struct DockSurfaceKey: EnvironmentKey { static let defaultValue = DockSurface.glass }
 
@@ -476,6 +487,7 @@ struct DockView: View {
     // MARK: Pieces
 
     private var surface: DockSurface {
+        if model.data.settings.barAppearance == .dark { return .dark }
         if case .glass = requestedSurface, #unavailable(macOS 26.0) { return .material }
         return requestedSurface
     }
@@ -486,7 +498,7 @@ struct DockView: View {
     /// in the other colour, for glass that ends up darker or lighter than its appearance.
     private var inkIsLight: Bool {
         switch surface {
-        case .material: return true
+        case .dark, .material: return true
         case .lightGlassStandIn: return false
         case .glass: return scheme == .dark
         }
@@ -496,10 +508,20 @@ struct DockView: View {
 
     private func background(_ f: DockFrame, _ layout: DockGeometry.Layout) -> some View {
         let g = f.geometry
-        let shape = RoundedRectangle(cornerRadius: min(g.thickness * 0.3, 18), style: .continuous)
+        let shape = RoundedRectangle(cornerRadius: g.cornerRadius, style: .continuous)
         let size = f.size(along: layout.end - layout.start, across: g.thickness)
         return Group {
-            if #available(macOS 26.0, *), surface == .glass {
+            if surface == .dark {
+                // Lit from above and below: the rim shows on horizontal edges and fades within
+                // the rounded ends, as on the Dock.
+                let k = min(0.5, g.cornerRadius / size.height)
+                shape.fill(DockInk.fill)
+                    .overlay(shape.strokeBorder(LinearGradient(stops: [
+                        .init(color: DockInk.rimLit, location: 0), .init(color: DockInk.rim, location: k),
+                        .init(color: DockInk.rim, location: 1 - k), .init(color: DockInk.rimLit, location: 1),
+                    ], startPoint: .top, endPoint: .bottom), lineWidth: 1))
+                    .overlay(shape.strokeBorder(.white.opacity(tracker.dropTargeted ? 0.6 : 0)))
+            } else if #available(macOS 26.0, *), surface == .glass {
                 Color.clear.glassEffect(.regular, in: shape)
             } else if surface == .lightGlassStandIn {
                 shape.fill(.white.opacity(0.62))
@@ -652,13 +674,19 @@ struct DockView: View {
             .padding(size * 0.14)
     }
 
-    /// The running dot sits between the icon and the screen edge.
+    /// The running dot sits between the icon and the screen edge, just clear of the icon, as on
+    /// the Dock.
     private func dot(_ item: DockGeometry.Placement, _ f: DockFrame) -> some View {
         let d = f.geometry.icon < 30 ? 3.0 : 4.0
-        return Circle().fill(ink.opacity(0.9)).frame(width: d, height: d)
-            .overlay(Circle().strokeBorder(halo.opacity(0.35), lineWidth: 0.5))
+        return Circle().fill(surface == .dark ? DockInk.dot : ink.opacity(0.9)).frame(width: d, height: d)
+            .overlay(Circle().strokeBorder(halo.opacity(surface == .dark ? 0 : 0.35), lineWidth: 0.5))
             .allowsHitTesting(false)
-            .position(f.point(axis: item.center, cross: DockFrame.inset + f.geometry.padding / 2))
+            .position(f.point(axis: item.center, cross: markCross(f)))
+    }
+
+    /// Across the bar, where the running dot and the active group's mark sit.
+    private func markCross(_ f: DockFrame) -> Double {
+        DockFrame.inset + f.geometry.padding - 0.5
     }
 
     /// The active group gets a short bar where an app gets its running dot, so the two never
@@ -666,22 +694,27 @@ struct DockView: View {
     private func activeMark(_ item: DockGeometry.Placement, _ f: DockFrame) -> some View {
         let d = f.geometry.icon < 30 ? 3.0 : 4.0
         let size = f.size(along: max(10, f.geometry.icon * 0.36), across: d)
-        return Capsule().fill(ink.opacity(0.9))
-            .overlay(Capsule().strokeBorder(halo.opacity(0.35), lineWidth: 0.5))
+        return Capsule().fill(surface == .dark ? DockInk.dot : ink.opacity(0.9))
+            .overlay(Capsule().strokeBorder(halo.opacity(surface == .dark ? 0 : 0.35), lineWidth: 0.5))
             .frame(width: size.width, height: size.height)
             .allowsHitTesting(false)
             .accessibilityHidden(true)
-            .position(f.point(axis: item.center, cross: DockFrame.inset + f.geometry.padding / 2))
+            .position(f.point(axis: item.center, cross: markCross(f)))
     }
 
     /// The line of the divider and the separator: one line in the ink beside a fainter one in
     /// the other colour, so it shows on a light or a dark bar.
     private func rule(_ f: DockFrame) -> some View {
+        if surface == .dark {
+            // One mid-grey point-wide line, about three quarters of the bar's thickness.
+            let line = f.size(along: 1, across: (f.geometry.thickness * 0.73).rounded())
+            return AnyView(Rectangle().fill(DockInk.separator).frame(width: line.width, height: line.height))
+        }
         let line = f.size(along: 1, across: f.geometry.thickness * 0.6)
         let pair = f.edge == .bottom
             ? AnyView(HStack(spacing: 0) { Rectangle().fill(ink.opacity(0.4)); Rectangle().fill(halo.opacity(0.18)) })
             : AnyView(VStack(spacing: 0) { Rectangle().fill(ink.opacity(0.4)); Rectangle().fill(halo.opacity(0.18)) })
-        return pair.frame(width: f.edge == .bottom ? 2 : line.width, height: f.edge == .bottom ? line.height : 2)
+        return AnyView(pair.frame(width: f.edge == .bottom ? 2 : line.width, height: f.edge == .bottom ? line.height : 2))
     }
 
     private func divider(_ f: DockFrame) -> some View {
@@ -767,6 +800,9 @@ struct DockView: View {
         Toggle("Automatically Hide and Show", isOn: $model.data.settings.autoHideBar)
         Toggle("Hide in Full-Screen Apps", isOn: model.hidesInFullScreenBinding)
             .disabled(model.data.settings.autoHideBar)
+        Picker("Appearance", selection: $model.data.settings.barAppearance) {
+            ForEach(BarAppearance.allCases, id: \.self) { Text($0.label).tag($0) }
+        }
         Picker("Position on Screen", selection: $model.data.settings.dockEdge) {
             ForEach(DockEdge.allCases, id: \.self) { Text($0.rawValue.capitalized).tag($0) }
         }
