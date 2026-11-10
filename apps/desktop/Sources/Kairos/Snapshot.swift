@@ -28,13 +28,15 @@ enum Snapshot {
         }
 
         func dock(_ name: String, pointer: DockGeometry.Slot? = nil, offset: Double = 0, reveal: Double = 1,
-                  reduceMotion: Bool = false, surface: DockSurface = .material, launching: String? = nil) {
+                  reduceMotion: Bool = false, surface: DockSurface = .material, launching: String? = nil,
+                  dragging: DockGeometry.Slot? = nil) {
             let frame = DockFrame(data: model.data, running: model.openApps, reduceMotion: reduceMotion)
             let rest = frame.geometry.layout(pointer: nil).items
             let p = pointer.flatMap { slot in rest.first { $0.slot == slot }?.center }.map { $0 + offset }
             let light = surface == .lightGlassStandIn
             let tracker = DockTracker(frame: frame, pointer: p, reveal: reveal)
             if let launching { tracker.launches.start(launching, now: Date()) }
+            if let dragging, let p { tracker.drag = (dragging, p) }
             shot("dock-\(name)", DockStage(tracker: tracker,
                                            autoHide: model.data.settings.autoHideBar, light: light)
                 .environment(\.dockSurface, surface)
@@ -53,6 +55,8 @@ enum Snapshot {
             dock("\(edge.rawValue)-36-hover-app", pointer: .app("com.apple.Safari"))
             dock("\(edge.rawValue)-36-hover-between", pointer: .app("com.apple.Safari"), offset: 22)
             dock("\(edge.rawValue)-36-hover-group", pointer: .group(work.id))
+            dock("\(edge.rawValue)-36-hover-divider", pointer: .divider)
+            dock("\(edge.rawValue)-36-dragging-app", pointer: .app("com.apple.Safari"), offset: 26, dragging: .app("com.apple.Safari"))
             dock("\(edge.rawValue)-36-hover-last", pointer: .app("com.apple.iCal"))
         }
         // Auto-hide: off screen, mid-slide (the eased halfway point), and back with the pointer on it.

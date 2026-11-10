@@ -59,4 +59,20 @@ extension Array where Element: Equatable {
         copy.insert(element, at: Swift.min(Swift.max(0, i + offset), copy.count))
         return copy
     }
+
+    /// The array with `element` moved to `index`, counted in the result.
+    public func moving(_ element: Element, to index: Int) -> [Element] {
+        guard let i = firstIndex(of: element) else { return self }
+        return moving(element, by: index - i)
+    }
+}
+
+/// Dragging an icon along Kairos Bar to reorder it among its peers (the pinned apps, or the
+/// groups).
+public enum DockReorder {
+    /// Where the dragged icon belongs: the peer whose resting centre is nearest the pointer.
+    /// Peers are evenly spaced, so the answer does not flip back once the icon has moved there.
+    public static func index(centers: [Double], pointer: Double) -> Int? {
+        centers.indices.min { abs(centers[$0] - pointer) < abs(centers[$1] - pointer) }
+    }
 }

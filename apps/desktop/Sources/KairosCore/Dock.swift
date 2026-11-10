@@ -18,6 +18,10 @@ public struct DockGeometry: Equatable, Sendable {
         /// Extent along the axis. Icons are square, so also their extent across the bar.
         public let size: Double
         public let scale: Double
+
+        public init(slot: Slot, center: Double, size: Double, scale: Double) {
+            (self.slot, self.center, self.size, self.scale) = (slot, center, size, scale)
+        }
     }
 
     public struct Layout: Equatable, Sendable {

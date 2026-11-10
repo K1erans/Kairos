@@ -476,6 +476,13 @@ final class AppModel: ObservableObject {
         data.groups[i].dockApps = data.groups[i].dockApps.moving(bundleId, by: offset)
     }
 
+    /// Puts a pinned app at `index` among the active group's apps, as it is dragged along the bar.
+    func moveDockApp(_ bundleId: String, to index: Int) {
+        guard let i = data.groups.firstIndex(where: { $0.id == data.focus.activeGroupId }) else { return }
+        let moved = data.groups[i].dockApps.moving(bundleId, to: index)
+        if moved != data.groups[i].dockApps { data.groups[i].dockApps = moved }
+    }
+
     // MARK: Tempo
 
     /// Strict chosen by hand before the timer starts holds until the timer stops.

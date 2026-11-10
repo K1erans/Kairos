@@ -106,7 +106,8 @@ enum DockLabels {
             if id == data.focus.activeGroupId, blockingOff { return (name, "Site blocking off") }
             return (name, data.settings.groupHotkeys && index < 9 ? "\u{2303}\(index + 1)" : nil)
         case .newGroup: return ("New Group\u{2026}", nil)
-        case .divider, .separator: return ("", nil)
+        case .divider: return ((data.settings.dockEdge == .bottom ? "\u{2195}" : "\u{2194}") + " Drag to Resize", nil)
+        case .separator: return ("", nil)
         case let .app(bundleId), let .running(bundleId): return (Apps.name(bundleId), nil)
         case let .folder(folder): return (folder.name, nil)
         case .addApp: return ("Add Apps to \(data.activeGroup?.name ?? "Group")\u{2026}", nil)
@@ -127,6 +128,21 @@ enum DockLabels {
     }
 }
 
+/// Kairos is rarely the front app, and macOS only lets the front app change the pointer. The
+/// window server has a per-app switch for that, which the Dock's stand-ins use; it is not a
+/// public call, so it is looked up by name and skipped when missing. Without it the resize
+/// arrows may not show, and the "Drag to Resize" label still does.
+enum BackgroundCursor {
+    static func allow() {
+        guard !DataStore.isScratch, let lib = dlopen(nil, RTLD_NOW),
+              let connection = dlsym(lib, "_CGSDefaultConnection"), let set = dlsym(lib, "CGSSetConnectionProperty") else { return }
+        typealias Connection = @convention(c) () -> Int32
+        typealias SetProperty = @convention(c) (Int32, Int32, CFString, CFTypeRef) -> Int32
+        let id = unsafeBitCast(connection, to: Connection.self)()
+        _ = unsafeBitCast(set, to: SetProperty.self)(id, id, "SetsCursorInBackground" as CFString, kCFBooleanTrue)
+    }
+}
+
 /// Pointer and frame state shared by the controller and the view.
 @MainActor
 final class DockTracker: ObservableObject {
@@ -134,6 +150,10 @@ final class DockTracker: ObservableObject {
     /// The pointer along the bar while it is on the bar, else nil.
     @Published var pointer: Double?
     @Published var resizing = false
+    /// An icon being dragged along the bar to reorder it, and where the pointer has it.
+    @Published var drag: (slot: DockGeometry.Slot, axis: Double)?
+    /// A drag on the bar is under way: it stays out and at rest size, and keeps the mouse.
+    var holding: Bool { resizing || drag != nil }
     /// An app is being dragged over the bar.
     @Published var dropTargeted = false
     /// How much of the bar is on screen: 1 unless auto-hide has slid it off its edge.
@@ -200,6 +220,7 @@ final class DockPanelController {
         panel.hasShadow = false
         panel.hidesOnDeactivate = false
         panel.ignoresMouseEvents = true
+        BackgroundCursor.allow()
         panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary]
         let host = DockHostingView(rootView: AnyView(DockView(tracker: tracker).environmentObject(model)))
         host.onPointer = { [weak self] in self?.pointerMoved() }
@@ -362,13 +383,13 @@ final class DockPanelController {
         case .bottom: fromEdge = mouse.y - screen.frame.minY
         }
         visibility.update(.init(atEdge: g.touchesEdge(axis: axis, fromEdge: fromEdge), onBar: onBar,
-                                held: menuOpen || tracker.resizing || tracker.dropTargeted,
+                                held: menuOpen || tracker.holding || tracker.dropTargeted,
                                 pushed: event.map(push) ?? 0 > 0),
                           rule: rule, now: now)
         let reveal = visibility.visible(at: now)
         if reveal != tracker.reveal { tracker.reveal = reveal }
         schedule(visibility)
-        if tracker.resizing {
+        if tracker.holding {
             panel.ignoresMouseEvents = false
             return
         }
@@ -443,15 +464,26 @@ struct DockView: View {
 
     var body: some View {
         let f = tracker.frame, g = f.geometry
-        let layout = g.layout(pointer: tracker.resizing ? nil : tracker.pointer)
+        let layout = g.layout(pointer: tracker.holding ? nil : tracker.pointer)
+        let grip = resizeGrip(layout, g)
         ZStack(alignment: .topLeading) {
             background(f, layout)
             ForEach(layout.keyed, id: \.key) { entry in
-                slot(entry.item, f)
+                slot(dragged(entry.item, layout), f)
+                    .zIndex(tracker.drag?.slot == entry.item.slot ? 1 : 0)
             }
-            if let h = layout.hovered { label(for: layout.items[h], f) }
+            if let h = layout.hovered { label(for: layout.items[h], f) } else if let grip { label(for: grip, f) }
         }
         .frame(width: f.size.width, height: f.size.height, alignment: .topLeading)
+        .coordinateSpace(name: Self.space)
+        // Neighbours slide aside as a dragged icon passes them.
+        .animation(tracker.drag != nil ? .easeOut(duration: 0.15) : nil, value: g.slots)
+        .onChange(of: grip != nil) { _, over in
+            // Set from the bar's own pointer tracking: hover events do not reach a panel that
+            // is never key.
+            if over, !cursorPushed { (f.edge == .bottom ? NSCursor.resizeUpDown : .resizeLeftRight).push(); cursorPushed = true }
+            if !over, cursorPushed { NSCursor.pop(); cursorPushed = false }
+        }
         .offset(slide(f))
         .opacity(f.motion.appearance(reveal: tracker.reveal).opacity)
         .onDrop(of: [.fileURL], delegate: DockDropTarget(model: model, tracker: tracker))
@@ -460,6 +492,55 @@ struct DockView: View {
             launches.update(running: running, now: Date())
             if launches != tracker.launches { tracker.launches = launches }
         }
+    }
+
+    static let space = "kairos.dock"
+
+    /// The divider drawn as a label-bearing item while the pointer is on it or dragging it, so
+    /// "Drag to Resize" shows where an icon's name would.
+    private func resizeGrip(_ layout: DockGeometry.Layout, _ g: DockGeometry) -> DockGeometry.Placement? {
+        guard let d = layout.items.first(where: { $0.slot == .divider }) else { return nil }
+        let over = tracker.pointer.map { abs($0 - d.center) <= d.size / 2 + g.gap / 2 } ?? false
+        guard tracker.resizing || (over && tracker.drag == nil) else { return nil }
+        return DockGeometry.Placement(slot: .divider, center: d.center, size: g.icon, scale: 1)
+    }
+
+    private func peers(of slot: DockGeometry.Slot, in items: [DockGeometry.Placement]) -> [DockGeometry.Placement] {
+        items.filter {
+            switch (slot, $0.slot) {
+            case (.app, .app), (.group, .group): return true
+            default: return false
+            }
+        }
+    }
+
+    /// The icon being dragged follows the pointer, between the first and last of its peers.
+    private func dragged(_ item: DockGeometry.Placement, _ layout: DockGeometry.Layout) -> DockGeometry.Placement {
+        guard let drag = tracker.drag, drag.slot == item.slot else { return item }
+        let centers = peers(of: item.slot, in: layout.items).map(\.center)
+        guard let lo = centers.min(), let hi = centers.max() else { return item }
+        return DockGeometry.Placement(slot: item.slot, center: min(hi, max(lo, drag.axis)), size: item.size, scale: item.scale)
+    }
+
+    /// Drag an app or a group along the bar to reorder it. A click still opens it.
+    private func reorder(_ slot: DockGeometry.Slot, _ f: DockFrame) -> some Gesture {
+        DragGesture(minimumDistance: 4, coordinateSpace: .named(Self.space))
+            .onChanged { value in
+                let axis = f.bar(value.location).axis
+                tracker.drag = (slot, axis)
+                let rest = tracker.frame.geometry.layout(pointer: nil).items
+                guard let to = DockReorder.index(centers: peers(of: slot, in: rest).map(\.center), pointer: axis) else { return }
+                switch slot {
+                case let .app(id):
+                    model.moveDockApp(id, to: to)
+                case let .group(id):
+                    let ids = model.data.groups.map(\.id), moved = ids.moving(id, to: to)
+                    if moved != ids { model.data.groups = moved.compactMap { id in model.data.groups.first { $0.id == id } } }
+                default:
+                    break
+                }
+            }
+            .onEnded { _ in tracker.drag = nil }
     }
 
     /// Opens an app from the bar. One that is not running yet pulses until it is.
@@ -552,6 +633,7 @@ struct DockView: View {
                     .frame(width: item.size, height: item.size)
                     .contentShape(Rectangle())
                     .onTapGesture { model.switchGroup(id) }
+                    .gesture(reorder(item.slot, f))
                     .contextMenu { groupMenu(model.data.groups[index]) }
                     .accessibilityLabel("Switch to \(model.data.groups[index].name)")
                     .accessibilityAddTraits(.isButton)
@@ -579,6 +661,7 @@ struct DockView: View {
                 .modifier(LaunchPulse(active: tracker.launches.ids.contains(bundleId)))
                 .contentShape(Rectangle())
                 .onTapGesture { launch(bundleId) }
+                .gesture(reorder(item.slot, f))
                 .contextMenu { appMenu(bundleId) }
                 .accessibilityLabel(Apps.name(bundleId))
                 .accessibilityAddTraits(.isButton)
@@ -723,11 +806,6 @@ struct DockView: View {
         return rule(f)
             .frame(width: hit.width, height: hit.height)
             .contentShape(Rectangle())
-            .onHover { inside in
-                let cursor: NSCursor = f.edge == .bottom ? .resizeUpDown : .resizeLeftRight
-                if inside, !cursorPushed { cursor.push(); cursorPushed = true }
-                if !inside, cursorPushed { NSCursor.pop(); cursorPushed = false }
-            }
             .onDisappear { if cursorPushed { NSCursor.pop(); cursorPushed = false } }
             .gesture(DragGesture(minimumDistance: 1)
                 .onChanged { _ in resize(edge: f.edge) }
@@ -797,6 +875,10 @@ struct DockView: View {
         Button("Add Apps to \(model.activeGroup?.name ?? "Group")…") { DockActions.addApps(model) }
         Button("Edit Groups…") { DockActions.editGroups(model, nil) }
         Divider()
+        Button("Make Bigger") { model.data.settings.iconSize = min(64, model.data.settings.iconSize + 6) }
+            .disabled(model.data.settings.iconSize >= 64)
+        Button("Make Smaller") { model.data.settings.iconSize = max(20, model.data.settings.iconSize - 6) }
+            .disabled(model.data.settings.iconSize <= 20)
         Toggle("Automatically Hide and Show", isOn: $model.data.settings.autoHideBar)
         Toggle("Hide in Full-Screen Apps", isOn: model.hidesInFullScreenBinding)
             .disabled(model.data.settings.autoHideBar)

@@ -84,4 +84,16 @@ final class MoveTests: XCTestCase {
         XCTAssertEqual(apps.moving("c", by: 5), apps)
         XCTAssertEqual(apps.moving("z", by: 1), apps)
     }
+
+    func testDraggedIconGoesToNearestPeerAndStaysThere() {
+        let centers = [10.0, 50, 90, 130]
+        XCTAssertEqual(DockReorder.index(centers: centers, pointer: -40), 0)
+        XCTAssertEqual(DockReorder.index(centers: centers, pointer: 69), 1)
+        XCTAssertEqual(DockReorder.index(centers: centers, pointer: 71), 2)
+        XCTAssertEqual(DockReorder.index(centers: centers, pointer: 400), 3)
+        XCTAssertNil(DockReorder.index(centers: [], pointer: 0))
+        XCTAssertEqual(["a", "b", "c", "d"].moving("a", to: 2), ["b", "c", "a", "d"])
+        XCTAssertEqual(["a", "b", "c", "d"].moving("d", to: 0), ["d", "a", "b", "c"])
+        XCTAssertEqual(["a", "b"].moving("b", to: 1), ["a", "b"])
+    }
 }
