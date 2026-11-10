@@ -1,6 +1,6 @@
 ------------------------------ MODULE StrictMode ------------------------------
-(* How Kairos Desktop's mode, Pomodoro timer and "Allow 5 min" overrides move
-   together. Every action is one @MainActor call in
+(* How Kairos Desktop's mode, Pomodoro timer, "Allow 5 min" overrides and the
+   active group's blocking rules move together. Every action is one @MainActor call in
    apps/desktop/Sources/Kairos/AppModel.swift, so each is one indivisible step.
    Quitting and relaunching Kairos are steps too: the app saves the end of a
    locked strict phase (FocusState.strictUntil) and launch picks it up again.
@@ -16,7 +16,8 @@ CONSTANTS
     ResetsOnEnterStrict,  \* AppModel.modeChanged: reset the ledger on entering strict
     LocksStrictControls,  \* AppModel.strictLocked: Skip and Stop do nothing in a strict focus phase
     QuitLocked,           \* AppDelegate.applicationShouldTerminate and the Quit buttons refuse in a strict focus phase
-    ResumesStrict         \* AppData.recoverAfterLaunch + TempoEngine.resumeStrict: launch picks up a saved strict phase
+    ResumesStrict,        \* AppData.recoverAfterLaunch + TempoEngine.resumeStrict: launch picks up a saved strict phase
+    LocksRules            \* AppData.updateGroup: refuses a looser active group while strictLocked (RuleLock)
 
 VARIABLES
     phase,       \* TempoEngine.phase: "idle", "focus", "rest" (short and long break alike)
@@ -32,9 +33,13 @@ VARIABLES
     up,          \* Kairos is running
     downStrict,  \* Kairos is not running and the saved strictUntil has not passed
     quitInStrict,\* history: an ordinary Quit went through during a strict focus phase
+    loosened,    \* history: an edit loosened the active group's rules during a strict focus phase
+    switchedLooser, \* history: a group switch put looser rules in force during a strict focus phase
     act          \* history: name of the last step, for reading traces
 
-vars == <<phase, paused, holds, preset, pending, groupStrict, mode, used, grant, escaped, up, downStrict, quitInStrict, act>>
+vars == <<phase, paused, holds, preset, pending, groupStrict, mode, used, grant, escaped, up, downStrict, quitInStrict,
+          loosened, switchedLooser, act>>
+rules == <<loosened, switchedLooser>>
 
 Blocks(m) == m \in {"focus", "strict"}                     \* Mode.blocks
 
@@ -60,6 +65,7 @@ Init ==
     /\ phase = "idle" /\ paused = FALSE /\ holds = FALSE /\ preset = FALSE /\ pending = "none"
     /\ groupStrict = FALSE /\ mode = "off" /\ used = 0 /\ grant = FALSE /\ escaped = FALSE
     /\ up = TRUE /\ downStrict = FALSE /\ quitInStrict = FALSE
+    /\ loosened = FALSE /\ switchedLooser = FALSE
     /\ act = "Launch"                                      \* AppData.recoverAfterLaunch: nothing saved, mode off
 
 \* The Mode picker (one ModePicker view, in the menu bar menu and on Today) -> AppModel.setMode
@@ -128,12 +134,24 @@ LongSleep  == phase # "idle" /\ ~paused /\ Halt("LongSleep", FALSE)
 
 \* AppModel.switchGroup -> TempoEngine.use. Import (AppModel.importData) can change the active
 \* group too, but only while the timer is idle and without touching the mode, which is this step.
-SwitchGroup(s) ==
+\* Deleting the active group (AppModel.deleteGroup) makes the first group active: this step too.
+\* `looser`: the new group blocks less than the old one. switchGroup has no strict guard.
+SwitchGroup(s, looser) ==
     /\ groupStrict' = s
     /\ IF phase = "idle" THEN preset' = s /\ pending' = "none"
        ELSE pending' = (IF s THEN "strict" ELSE "plain") /\ UNCHANGED preset
+    /\ switchedLooser' = (switchedLooser \/ (looser /\ InStrictPhase))
     /\ act' = "SwitchGroup"
-    /\ UNCHANGED <<phase, paused, holds, mode, used, grant, escaped>>
+    /\ UNCHANGED <<phase, paused, holds, mode, used, grant, escaped, loosened>>
+
+\* A change to the active group's rules: the Rules page (AppModel.groupBinding), Kairos Shield's
+\* rule.addSite / rule.addElement / rule.removeElement, Kairos Bar's Block and Unblock. All go
+\* through AppData.updateGroup. `looser`: it unblocks, allows, shows an element or eases Jev.
+EditRules(looser) ==
+    /\ (LocksRules /\ looser) => ~InStrictPhase
+    /\ loosened' = (loosened \/ (looser /\ InStrictPhase))
+    /\ act' = "EditRules"
+    /\ UNCHANGED <<phase, paused, holds, preset, pending, groupStrict, mode, used, grant, escaped, switchedLooser>>
 
 \* AppModel.requestOverride -> OverrideLedger.request (the reason is typed, so always present)
 Override ==
@@ -191,14 +209,16 @@ Relaunch ==
 
 \* Everything the running app does.
 AppStep ==
-    \/ \E m \in {"off", "focus", "break", "strict"} : SetMode(m)
-    \/ StartFocus \/ Pause \/ Resume \/ Skip \/ Stop \/ TimeUp \/ LongSleep
-    \/ \E s \in BOOLEAN : SwitchGroup(s)
-    \/ Override \/ GrantExpires
+    \/ /\ \/ \E m \in {"off", "focus", "break", "strict"} : SetMode(m)
+          \/ StartFocus \/ Pause \/ Resume \/ Skip \/ Stop \/ TimeUp \/ LongSleep
+          \/ Override \/ GrantExpires
+       /\ UNCHANGED rules
+    \/ \E s, looser \in BOOLEAN : SwitchGroup(s, looser)
+    \/ \E looser \in BOOLEAN : EditRules(looser)
 
 Next ==
     \/ up /\ AppStep /\ UNCHANGED <<up, downStrict, quitInStrict>>
-    \/ Quit \/ ForceQuit \/ TimeUpWhileQuit \/ Relaunch
+    \/ (Quit \/ ForceQuit \/ TimeUpWhileQuit \/ Relaunch) /\ UNCHANGED rules
 
 Spec == Init /\ [][Next]_vars
 
@@ -221,4 +241,10 @@ UsedBounded == used <= Max
 
 \* While a timer runs, the mode the extensions see is the mode the timer implies.
 ModeMatchesTimer == phase # "idle" => mode = TempoMode(phase, holds, preset)
+
+\* No edit loosens the rules in force during a strict focus phase; adding blocks is fine.
+StrictRulesHold == ~loosened
+
+\* No group switch puts looser rules in force during a strict focus phase.
+StrictKeepsGroup == ~switchedLooser
 ===============================================================================

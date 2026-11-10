@@ -1,4 +1,4 @@
-import { formatTimeLeft } from "./lib/match.js";
+import { formatTimeLeft, ruleLockText } from "./lib/match.js";
 
 const $ = (id) => document.getElementById(id);
 const LABELS = { off: "Off", focus: "Focus", break: "Break", strict: "Strict" };
@@ -49,6 +49,9 @@ function render() {
   $("pick").disabled = !pickable;
   const list = $("list");
   list.textContent = "";
+  const rulesLocked = typeof data.rulesLockedUntil === "number" ? data.rulesLockedUntil : null;
+  $("rulesNote").hidden = rulesLocked === null;
+  $("rulesNote").textContent = rulesLocked === null ? "" : ruleLockText(rulesLocked);
   for (const rule of data.localSelectors || []) {
     const li = document.createElement("li");
     const code = document.createElement("code");
@@ -56,6 +59,7 @@ function render() {
     code.title = rule.selector;
     const remove = document.createElement("button");
     remove.textContent = "Show";
+    remove.disabled = rulesLocked !== null;
     remove.addEventListener("click", async () => {
       await chrome.runtime.sendMessage({ type: "elements.remove", host: rule.host, selector: rule.selector });
       load();

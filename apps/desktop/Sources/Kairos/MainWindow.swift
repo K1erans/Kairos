@@ -165,6 +165,9 @@ struct StringListEditor: View {
     let placeholder: String
     @Binding var items: [String]
     var normalize: (String) -> String = { $0.trimmingCharacters(in: .whitespaces) }
+    /// False while a strict focus phase locks the list against loosening.
+    var canAdd = true
+    var canRemove = true
     @State private var draft = ""
 
     var body: some View {
@@ -174,21 +177,24 @@ struct StringListEditor: View {
                 HStack {
                     Text(item).textSelection(.enabled)
                     Spacer()
-                    Button { items.removeAll { $0 == item } } label: { Image(systemName: "minus.circle") }
-                        .buttonStyle(.plain).foregroundStyle(.secondary)
-                        .accessibilityLabel("Remove \(item)")
+                    if canRemove {
+                        Button { items.removeAll { $0 == item } } label: { Image(systemName: "minus.circle") }
+                            .buttonStyle(.plain).foregroundStyle(.secondary)
+                            .accessibilityLabel("Remove \(item)")
+                    }
                 }
             }
             HStack {
                 TextField(placeholder, text: $draft).textFieldStyle(.roundedBorder).onSubmit(add)
                 Button("Add", action: add).disabled(normalize(draft).isEmpty)
             }
+            .disabled(!canAdd)
         }
     }
 
     private func add() {
         let v = normalize(draft)
-        guard !v.isEmpty else { return }
+        guard canAdd, !v.isEmpty else { return }
         if !items.contains(v) { items.append(v) }
         draft = ""
     }
@@ -200,6 +206,8 @@ struct AppListEditor: View {
     @Binding var bundleIds: [String]
     /// Up and down buttons on each row, for the order of apps on Kairos Bar.
     var reorderable = false
+    /// False while a strict focus phase locks the list against loosening.
+    var canRemove = true
     @State private var picking = false
 
     var body: some View {
@@ -225,9 +233,11 @@ struct AppListEditor: View {
                             .disabled(bundleIds.last == id)
                             .accessibilityLabel("Move \(Apps.name(id)) down")
                     }
-                    Button { bundleIds.removeAll { $0 == id } } label: { Image(systemName: "minus.circle") }
-                        .buttonStyle(.plain).foregroundStyle(.secondary)
-                        .accessibilityLabel("Remove \(Apps.name(id))")
+                    if canRemove {
+                        Button { bundleIds.removeAll { $0 == id } } label: { Image(systemName: "minus.circle") }
+                            .buttonStyle(.plain).foregroundStyle(.secondary)
+                            .accessibilityLabel("Remove \(Apps.name(id))")
+                    }
                 }
             }
         }
@@ -705,26 +715,33 @@ struct RulesPage: View {
             Divider()
             if let id = model.selectedGroupId, model.data.group(id) != nil {
                 let g = model.groupBinding(id)
+                let lock = model.ruleLock(for: id)
                 ScrollView {
                     VStack(alignment: .leading, spacing: 22) {
                         Text("These apply while \(g.wrappedValue.name) is the active group and the mode is Focus or Strict.")
                             .foregroundStyle(.secondary)
+                        if let lock {
+                            Label(lock, systemImage: "lock.fill").foregroundStyle(.orange)
+                        }
                         AppListEditor(title: "Blocked apps", empty: "No apps blocked. Add other browsers here to stop site rules being bypassed.",
-                                      bundleIds: g.blockedApps)
-                        StringListEditor(title: "Blocked sites", placeholder: "example.com", items: g.blockSites, normalize: Rules.normalizeSite)
-                        StringListEditor(title: "Always allowed sites", placeholder: "docs.google.com", items: g.allowSites, normalize: Rules.normalizeSite)
-                        hidden(g)
+                                      bundleIds: g.blockedApps, canRemove: lock == nil)
+                        StringListEditor(title: "Blocked sites", placeholder: "example.com", items: g.blockSites, normalize: Rules.normalizeSite,
+                                         canRemove: lock == nil)
+                        StringListEditor(title: "Always allowed sites", placeholder: "docs.google.com", items: g.allowSites, normalize: Rules.normalizeSite,
+                                         canAdd: lock == nil)
+                        hidden(g, locked: lock != nil)
                         VStack(alignment: .leading, spacing: 6) {
                             Text("Smart blocking with Jev").font(.headline)
                             Text("Jev is a service from TypeSafe that checks whether a page or app fits your current task. It needs a TypeSafe key (Settings > API keys).")
                                 .font(.callout).foregroundStyle(.secondary)
                             Toggle("Ask Jev about sites and apps that are on no list", isOn: g.jevEnabled)
+                                .disabled(lock != nil && g.wrappedValue.jevEnabled)
                             HStack {
                                 Text("Block when \u{201C}distracting\u{201D} is at least")
                                 Slider(value: g.jevThreshold, in: 0.5...0.95, step: 0.05).frame(width: 160)
                                 Text(g.wrappedValue.jevThreshold.formatted(.number.precision(.fractionLength(2)))).monospacedDigit()
                             }
-                            .disabled(!g.wrappedValue.jevEnabled)
+                            .disabled(!g.wrappedValue.jevEnabled || lock != nil)
                             if let problem = model.jevReadiness(for: g.wrappedValue).problem {
                                 Label(problem, systemImage: "exclamationmark.triangle.fill")
                                     .font(.callout).foregroundStyle(.orange)
@@ -740,7 +757,7 @@ struct RulesPage: View {
         }
     }
 
-    private func hidden(_ g: Binding<AppGroup>) -> some View {
+    private func hidden(_ g: Binding<AppGroup>, locked: Bool) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("Hidden page elements").font(.headline)
             let entries = g.wrappedValue.hiddenElements.sorted { $0.key < $1.key }
@@ -753,12 +770,14 @@ struct RulesPage: View {
                         Text(host).fontWeight(.medium)
                         Text(selector).font(.system(.callout, design: .monospaced)).foregroundStyle(.secondary).lineLimit(1)
                         Spacer()
-                        Button {
-                            g.wrappedValue.hiddenElements[host]?.removeAll { $0 == selector }
-                            if g.wrappedValue.hiddenElements[host]?.isEmpty == true { g.wrappedValue.hiddenElements[host] = nil }
-                        } label: { Image(systemName: "minus.circle") }
-                            .buttonStyle(.plain).foregroundStyle(.secondary)
-                            .accessibilityLabel("Remove rule for \(host)")
+                        if !locked {
+                            Button {
+                                g.wrappedValue.hiddenElements[host]?.removeAll { $0 == selector }
+                                if g.wrappedValue.hiddenElements[host]?.isEmpty == true { g.wrappedValue.hiddenElements[host] = nil }
+                            } label: { Image(systemName: "minus.circle") }
+                                .buttonStyle(.plain).foregroundStyle(.secondary)
+                                .accessibilityLabel("Remove rule for \(host)")
+                        }
                     }
                 }
             }
@@ -905,9 +924,29 @@ struct SettingsPage: View {
                 Picker("Screen edge", selection: $model.data.settings.dockEdge) {
                     ForEach(DockEdge.allCases, id: \.self) { Text($0.rawValue.capitalized).tag($0) }
                 }
+                Picker("Appearance", selection: $model.data.settings.barAppearance) {
+                    ForEach(BarAppearance.allCases, id: \.self) { Text($0.label).tag($0) }
+                }
                 Slider(value: $model.data.settings.iconSize, in: 20...64, step: 2) { Text("Icon size: \(Int(model.data.settings.iconSize))") }
                 Text("You can also drag the divider on Kairos Bar itself.").font(.callout).foregroundStyle(.secondary)
                 Toggle("Automatically hide and show Kairos Bar", isOn: $model.data.settings.autoHideBar)
+                VStack(alignment: .leading, spacing: 4) {
+                    Toggle("Hide Kairos Bar in full-screen apps", isOn: model.hidesInFullScreenBinding)
+                        .disabled(model.data.settings.autoHideBar)
+                    Text(model.data.settings.autoHideBar
+                         ? "With auto-hide on, Kairos Bar always keeps out of full-screen apps, as the Dock does."
+                         : "Kairos Bar stays on every desktop and keeps out of full-screen apps. Push the pointer against the screen edge twice to bring it out there.")
+                        .font(.callout).foregroundStyle(.secondary)
+                }
+                VStack(alignment: .leading, spacing: 4) {
+                    Toggle("Keep windows clear of Kairos Bar", isOn: $model.data.settings.keepsWindowsClear)
+                    Text(windowsClearNote).font(.callout).foregroundStyle(axTrusted ? .secondary : Color.orange)
+                    if !axTrusted, model.data.settings.keepsWindowsClear {
+                        Button("Allow Accessibility…") {
+                            _ = AXIsProcessTrustedWithOptions(["AXTrustedCheckOptionPrompt": true] as CFDictionary)
+                        }
+                    }
+                }
                 Toggle("Show Downloads and Trash at the end of Kairos Bar", isOn: $model.data.settings.showsDockFolders)
                 VStack(alignment: .leading, spacing: 4) {
                     Toggle("Use Kairos Bar instead of the macOS Dock", isOn: Binding(
@@ -1015,6 +1054,15 @@ struct SettingsPage: View {
             axTrusted = AXIsProcessTrusted()
             browsers = BridgeInstaller.installedBrowsers()
         }
+    }
+
+    private var windowsClearNote: String {
+        if !axTrusted {
+            return "Off until Kairos has the Accessibility permission: macOS keeps windows clear only of its own Dock, so Kairos needs Accessibility to move them."
+        }
+        return model.data.settings.autoHideBar
+            ? "Only while Kairos Bar stays on screen. With auto-hide on, windows can go under it, as with the Dock."
+            : "Windows that would sit under Kairos Bar are moved or shortened to end at its edge, as macOS does for the Dock. Full-screen windows are left alone."
     }
 
     private func keyRow(_ label: String, has: Bool, text: Binding<String>, account: String) -> some View {

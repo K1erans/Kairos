@@ -7,10 +7,13 @@ import Security
 import ServiceManagement
 import SwiftUI
 
+/// API keys. A scratch copy keeps them in its scratch folder and never touches the Keychain
+/// (KeyStore).
 enum Keychain {
     static let service = "com.kairos.desktop"
 
     static func get(_ account: String) -> String? {
+        if case let .file(url) = KeyStore.current { return ScratchKeys(url: url).get(account) }
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service,
             kSecAttrAccount as String: account, kSecReturnData as String: true, kSecMatchLimit as String: kSecMatchLimitOne,
@@ -22,6 +25,7 @@ enum Keychain {
 
     @discardableResult
     static func set(_ value: String, for account: String) -> Bool {
+        if case let .file(url) = KeyStore.current { return ScratchKeys(url: url).set(value, for: account) }
         let base: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service, kSecAttrAccount as String: account,
         ]

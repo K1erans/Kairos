@@ -100,11 +100,6 @@ extension AppData {
         }
         return focus
     }
-
-    public mutating func updateActiveGroup(_ change: (inout AppGroup) -> Void) {
-        guard let i = groups.firstIndex(where: { $0.id == activeGroup?.id }) else { return }
-        change(&groups[i])
-    }
 }
 
 /// What to hide and unhide when "hide apps outside the group" switches groups.

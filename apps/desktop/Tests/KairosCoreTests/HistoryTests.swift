@@ -97,15 +97,17 @@ final class HistoryTests: XCTestCase {
 
     func testHiddenElementsAddAndRemove() {
         var d = AppData.starter()
-        d.updateActiveGroup { $0.hideElement("#a", on: "news.com") }
-        d.updateActiveGroup { $0.hideElement("#a", on: "news.com") }
-        d.updateActiveGroup { $0.hideElement("#b", on: "news.com") }
+        func hide(_ sel: String, _ host: String, _ on: Bool) -> Bool { d.setElementHidden(sel, on: host, on, strictLocked: false) }
+        XCTAssertTrue(hide("#a", "https://www.News.com/x", true))
+        XCTAssertFalse(hide("#a", "news.com", true), "already hidden")
+        XCTAssertTrue(hide("#b", "news.com", true))
         XCTAssertEqual(d.activeGroup?.hiddenElements["news.com"], ["#a", "#b"])
-        d.updateActiveGroup { $0.showElement("#a", on: "news.com") }
+        XCTAssertTrue(hide("#a", "news.com", false))
         XCTAssertEqual(d.activeGroup?.hiddenElements["news.com"], ["#b"])
-        d.updateActiveGroup { $0.showElement("#b", on: "news.com") }
+        XCTAssertTrue(hide("#b", "news.com", false))
         XCTAssertNil(d.activeGroup?.hiddenElements["news.com"], "no empty entry is left behind")
-        d.updateActiveGroup { $0.showElement("#zz", on: "other.com") }
+        XCTAssertFalse(hide("#zz", "other.com", false))
+        XCTAssertFalse(hide("", "news.com", true))
         XCTAssertEqual(d.activeGroup?.hiddenElements, [:])
     }
 

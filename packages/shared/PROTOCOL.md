@@ -95,6 +95,10 @@ Other pushes:
 
 - `rule.addSite` adds the site to the active group's block or allow list and removes it from the
   other list. "Block this site" in Shield's popup and "Always allow" on a Jev overlay send it.
+- While a strict focus phase is locked (`strictUntil` set) rules can only get stricter: the app
+  refuses `rule.addSite` with `list: "allow"` and `rule.removeElement`, and pushes `state` so the
+  extension's copy matches again. `rule.addSite` with `list: "block"` and `rule.addElement` still
+  work. Kairos Shield refuses both in its own UI first.
 - `overrideMinutes` is how long one override lasts; the extensions show it ("Allow 5 min").
 - `strictUntil` (ms, or `null`) is set while a strict focus phase is locked: the time it ends, or,
   when the timer is paused, the time it would end if resumed now. While the last state an

@@ -130,6 +130,12 @@ export function strictLockUntil(state, now = Date.now()) {
   return state && typeof state.strictUntil === "number" && state.strictUntil > now ? state.strictUntil : null;
 }
 
+/** Why a rule cannot be loosened now (a locked strict phase ends at `until`, ms). Kairos Desktop says the same on its Rules page. */
+export function ruleLockText(until) {
+  const at = new Date(until).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  return `Strict focus until ${at}: you can block more, but nothing can be unblocked or allowed until then.`;
+}
+
 /** "5 minutes" / "1 minute", for the labels that offer an override. */
 export function minutesText(minutes) {
   return minutes === 1 ? "1 minute" : `${minutes} minutes`;

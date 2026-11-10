@@ -10,39 +10,61 @@ import UniformTypeIdentifiers
 final class QuickAddPanelController {
     private let panel: FloatingPanel
     private let model: AppModel
+    private var resignObserver: NSObjectProtocol?
+    /// A click on another window can leave the box key, and one on the bare desktop always
+    /// does, so any mouse-down outside it closes it too. Mouse monitors need no permission.
+    private let clickAway: ClickAway<Any>
 
     init(model: AppModel) {
         self.model = model
-        panel = FloatingPanel(contentRect: NSRect(x: 0, y: 0, width: 620, height: 96),
-                              styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        let panel = FloatingPanel(contentRect: NSRect(x: 0, y: 0, width: 620, height: 96),
+                                  styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        self.panel = panel
         panel.allowsKey = true
         panel.level = .modalPanel
         panel.isOpaque = false
         panel.backgroundColor = .clear
         panel.hasShadow = true
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-        // Clicking anywhere else closes it.
+        clickAway = ClickAway(install: { [weak panel] report in
+            let downs: NSEvent.EventTypeMask = [.leftMouseDown, .rightMouseDown, .otherMouseDown]
+            var monitors: [Any] = []
+            // Clicks in other apps and on the desktop.
+            if let m = NSEvent.addGlobalMonitorForEvents(matching: downs, handler: { _ in
+                MainActor.assumeIsolated { report(false) }
+            }) { monitors.append(m) }
+            // Clicks in Kairos's own windows, such as Kairos Bar; they still go through.
+            if let m = NSEvent.addLocalMonitorForEvents(matching: downs, handler: { event in
+                MainActor.assumeIsolated { report(event.window === panel) }
+                return event
+            }) { monitors.append(m) }
+            return monitors
+        }, remove: NSEvent.removeMonitor)
         resignObserver = NotificationCenter.default.addObserver(forName: NSWindow.didResignKeyNotification, object: panel, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.panel.orderOut(nil) }
+            MainActor.assumeIsolated { self?.close() }
         }
     }
 
-    private var resignObserver: NSObjectProtocol?
-
     /// The hotkey opens the box, and closes it when it is already open.
     func toggle() {
-        if panel.isVisible { panel.orderOut(nil) } else { show() }
+        if panel.isVisible { close() } else { show() }
     }
 
     func show() {
         // A fresh view each time so the field starts empty and focused.
-        panel.contentView = NSHostingView(rootView: QuickAddView(close: { [weak self] in self?.panel.orderOut(nil) })
+        panel.contentView = NSHostingView(rootView: QuickAddView(close: { [weak self] in self?.close() })
             .environmentObject(model))
         if let screen = NSScreen.main {
             let f = screen.visibleFrame
             panel.setFrameOrigin(NSPoint(x: f.midX - 310, y: f.minY + f.height * 0.66))
         }
         panel.makeKeyAndOrderFront(nil)
+        clickAway.start { [weak self] in self?.panel.orderOut(nil) }
+    }
+
+    private func close() {
+        clickAway.stop()
+        panel.orderOut(nil)
     }
 }
 

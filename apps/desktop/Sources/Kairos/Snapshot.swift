@@ -64,6 +64,23 @@ enum Snapshot {
             dock("\(edge.rawValue)-36-autohide-revealed", pointer: .app("com.apple.Safari"))
         }
         model.data.settings.autoHideBar = false
+        // Name labels over the first and last slot, short and long, never cut short (DockLabel).
+        model.data.settings.iconSize = 24
+        model.data.settings.groupHotkeys = true
+        for edge in DockEdge.allCases {
+            model.data.settings.dockEdge = edge
+            dock("\(edge.rawValue)-24-label-first-short", pointer: .group(work.id))
+            model.data.groups[0].name = "Quarterly Planning and Reviews"
+            dock("\(edge.rawValue)-24-label-first-long", pointer: .group(work.id))
+            model.data.groups[0].name = work.name
+            dock("\(edge.rawValue)-24-label-last-trash", pointer: .folder(.trash))
+            model.data.settings.showsDockFolders = false
+            model.showRunningForSnapshot(["com.microsoft.VSCodeInsiders"])
+            dock("\(edge.rawValue)-24-label-last-long", pointer: .running("com.microsoft.VSCodeInsiders"))
+            model.showRunningForSnapshot([])
+            model.data.settings.showsDockFolders = true
+        }
+        model.data.settings.groupHotkeys = false
         model.data.settings.dockEdge = .left
         model.data.settings.iconSize = 64
         dock("left-64-hover-app", pointer: .app("com.apple.Notes"))
@@ -91,10 +108,20 @@ enum Snapshot {
         // Open apps: running dots, and an app that is not in the group after a separator.
         model.showRunningForSnapshot(["com.apple.Safari", "com.apple.Notes", "com.hnc.Discord"])
         dock("left-36-running")
-        dock("left-36-running-light-glass", surface: .lightGlassStandIn)
         model.data.settings.dockEdge = .bottom
+        dock("bottom-36-running")
+        // The owner's bar: bottom edge, 24 pt icons, apps open, Dark (the default) and Liquid Glass.
+        model.data.settings.iconSize = 24
+        dock("bottom-24-running")
+        dock("bottom-24-running-hover-app", pointer: .app("com.apple.Safari"))
+        model.data.settings.barAppearance = .glass
+        dock("bottom-24-running-glass")
+        model.data.settings.iconSize = 36
         dock("bottom-36-running-light-glass", surface: .lightGlassStandIn)
         model.data.settings.dockEdge = .left
+        dock("left-36-running-glass")
+        dock("left-36-running-light-glass", surface: .lightGlassStandIn)
+        model.data.settings.barAppearance = .dark
         dock("left-36-hover-trash", pointer: .folder(.trash))
         dock("left-36-launching", launching: "com.apple.iCal")
         // Reduce motion: no magnification under the pointer, and auto-hide fades instead of sliding.
@@ -133,6 +160,15 @@ enum Snapshot {
         model.showTimerForSnapshot(waiting)
         model.setMode(.off) // apply(.awaitingFocus) turns the mode off
         shot("main-today-break-over", size: CGSize(width: 1000, height: 660), MainWindow())
+        // Strict focus 10 minutes in: the Rules page can add blocks but not remove them.
+        var strict = TempoEngine(preset: preset)
+        strict.start(.focus, strict: true, now: model.now.addingTimeInterval(-600))
+        model.showTimerForSnapshot(strict)
+        model.data.groups[0].hiddenElements = ["youtube.com": ["#related"]]
+        model.page = .rules
+        model.selectedGroupId = work.id
+        shot("main-rules-strict", size: CGSize(width: 1000, height: 900), MainWindow())
+        model.data.groups[0].hiddenElements = [:]
         model.showTimerForSnapshot(TempoEngine(preset: preset))
         model.setMode(.off)
         let added = model.addGroup()

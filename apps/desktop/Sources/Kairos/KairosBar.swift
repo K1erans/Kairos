@@ -36,22 +36,34 @@ struct DockFrame: Equatable {
         motion = DockMotion(reduced: inputs.reduceMotion)
         geometry = DockGeometry(slots: inputs.slots, icon: inputs.icon, maxScale: motion.maxScale)
         edge = inputs.edge
-        (lead, trail) = geometry.overflow
+        labelWidth = inputs.labelWidth
+        var (lead, trail) = geometry.overflow
+        // A bottom bar's labels run along it, so the panel is at least as long as the widest.
+        if edge == .bottom {
+            let grow = DockLabel.growth(length: lead + geometry.restLength + trail, widest: labelWidth)
+            lead += grow
+            trail += grow
+        }
+        (self.lead, self.trail) = (lead, trail)
     }
 
     /// What the frame depends on, compared before building one, because `overflow` samples
     /// every pointer position.
     struct Inputs: Equatable {
         let slots: [DockGeometry.Slot], icon: Double, edge: DockEdge, reduceMotion: Bool
+        /// The widest name label any slot can show.
+        let labelWidth: Double
         init(data: AppData, running: [String], reduceMotion: Bool) {
             slots = DockGeometry.slots(for: data, running: running)
             icon = data.settings.iconSize
             edge = data.settings.dockEdge
             self.reduceMotion = reduceMotion
+            labelWidth = DockLabels.widest(slots, data: data)
         }
     }
 
-    var labelLane: Double { edge == .bottom ? 44 : 220 }
+    let labelWidth: Double
+    var labelLane: Double { edge == .bottom ? 44 : DockLabel.sideLane(widest: labelWidth) }
     var axisLength: Double { lead + geometry.restLength + trail }
     var crossLength: Double { Self.inset + geometry.thickness + geometry.headroom + labelLane }
     var size: CGSize { edge == .bottom ? CGSize(width: axisLength, height: crossLength) : CGSize(width: crossLength, height: axisLength) }
@@ -78,6 +90,43 @@ struct DockFrame: Equatable {
     }
 }
 
+/// The text of Kairos Bar's name labels, and how wide each draws, measured with the font it
+/// draws in so the panel can make room for the widest.
+enum DockLabels {
+    static let font = NSFont.systemFont(ofSize: 13, weight: .medium)
+    static let height = 26.0
+    static let padding = 11.0
+    static let spacing = 8.0
+
+    static func text(_ slot: DockGeometry.Slot, data: AppData, blockingOff: Bool) -> (title: String, detail: String?) {
+        switch slot {
+        case let .group(id):
+            let index = data.groups.firstIndex { $0.id == id } ?? 0
+            let name = data.group(id)?.name ?? ""
+            if id == data.focus.activeGroupId, blockingOff { return (name, "Site blocking off") }
+            return (name, data.settings.groupHotkeys && index < 9 ? "\u{2303}\(index + 1)" : nil)
+        case .newGroup: return ("New Group\u{2026}", nil)
+        case .divider, .separator: return ("", nil)
+        case let .app(bundleId), let .running(bundleId): return (Apps.name(bundleId), nil)
+        case let .folder(folder): return (folder.name, nil)
+        case .addApp: return ("Add Apps to \(data.activeGroup?.name ?? "Group")\u{2026}", nil)
+        }
+    }
+
+    static func width(_ title: String, _ detail: String?) -> Double {
+        func measure(_ s: String) -> Double { ceil((s as NSString).size(withAttributes: [.font: font]).width) }
+        return 2 * padding + measure(title) + (detail.map { spacing + measure($0) } ?? 0) + 2
+    }
+
+    /// The widest label any of `slots` can show, counting the active group's longest note.
+    static func widest(_ slots: [DockGeometry.Slot], data: AppData) -> Double {
+        slots.map { slot in
+            let t = text(slot, data: data, blockingOff: true)
+            return t.title.isEmpty ? 0 : width(t.title, t.detail)
+        }.max() ?? 0
+    }
+}
+
 /// Pointer and frame state shared by the controller and the view.
 @MainActor
 final class DockTracker: ObservableObject {
@@ -89,6 +138,8 @@ final class DockTracker: ObservableObject {
     @Published var dropTargeted = false
     /// How much of the bar is on screen: 1 unless auto-hide has slid it off its edge.
     @Published var reveal: Double
+    /// The part of the panel along the bar that is on the visible screen, which labels stay in.
+    @Published var labelBounds: ClosedRange<Double>?
     /// Apps clicked on the bar that are still starting, which pulse.
     @Published var launches = DockLaunches()
     @Published var trashFull = false
@@ -124,8 +175,15 @@ final class DockPanelController {
     private let tracker: DockTracker
     private var cancellables: Set<AnyCancellable> = []
     private var monitors: [Any] = []
-    /// Nil while auto-hide is off.
-    private var autoHide: DockAutoHide?
+    /// Whether the bar is out: pinned, auto-hiding, or out of the way of a full-screen app.
+    private var visibility = DockAutoHide(rule: .pinned, now: Date())
+    /// A full-screen app has the active Space on the bar's screen.
+    private var fullScreen = false
+    private var rule: DockAutoHide.Rule {
+        let s = model.data.settings
+        return .init(autoHide: s.autoHideBar, hidesInFullScreen: s.hidesInFullScreen, fullScreen: fullScreen)
+    }
+    private let keeper = WindowKeeper()
     private var menuOpen = false
     private var frameTimer: Timer?
     private var decisionTimer: Timer?
@@ -162,13 +220,20 @@ final class DockPanelController {
             .sink { [weak self] _ in DispatchQueue.main.async { self?.layout() } }
             .store(in: &cancellables)
         NotificationCenter.default.publisher(for: NSApplication.didChangeScreenParametersNotification)
-            .sink { [weak self] _ in self?.layout() }
+            .sink { [weak self] _ in self?.layout(); self?.spaceMayHaveChanged() }
             .store(in: &cancellables)
-        model.$data.map(\.settings.autoHideBar).removeDuplicates()
-            .sink { [weak self] on in
-                self?.autoHide = on ? DockAutoHide(now: Date()) : nil
-                DispatchQueue.main.async { self?.pointerMoved() }
-            }
+        // A swipe to another Space, or an app coming forward, may put a full-screen app in front.
+        for name in [NSWorkspace.activeSpaceDidChangeNotification, NSWorkspace.didActivateApplicationNotification] {
+            NSWorkspace.shared.notificationCenter.publisher(for: name)
+                .sink { [weak self] _ in self?.spaceMayHaveChanged() }
+                .store(in: &cancellables)
+        }
+        model.$data.map { [$0.settings.autoHideBar, $0.settings.hidesInFullScreen, $0.settings.keepsWindowsClear] }.removeDuplicates()
+            .sink { [weak self] _ in DispatchQueue.main.async { self?.pointerMoved(); self?.keepWindowsClear() } }
+            .store(in: &cancellables)
+        // Windows are kept clear of the bar's final size, not every step of a divider drag.
+        tracker.$resizing.removeDuplicates().dropFirst()
+            .sink { [weak self] _ in DispatchQueue.main.async { self?.keepWindowsClear() } }
             .store(in: &cancellables)
         // A context menu holds the bar out while it is open.
         for (name, open) in [(NSMenu.didBeginTrackingNotification, true), (NSMenu.didEndTrackingNotification, false)] {
@@ -181,76 +246,133 @@ final class DockPanelController {
             .store(in: &cancellables)
 
         let events: NSEvent.EventTypeMask = [.mouseMoved, .leftMouseDragged, .rightMouseDragged]
-        if let m = NSEvent.addGlobalMonitorForEvents(matching: events, handler: { [weak self] _ in
-            MainActor.assumeIsolated { self?.pointerMoved() }
+        if let m = NSEvent.addGlobalMonitorForEvents(matching: events, handler: { [weak self] event in
+            MainActor.assumeIsolated { self?.pointerMoved(event) }
         }) { monitors.append(m) }
         if let m = NSEvent.addLocalMonitorForEvents(matching: events, handler: { [weak self] event in
-            MainActor.assumeIsolated { self?.pointerMoved() }
+            MainActor.assumeIsolated { self?.pointerMoved(event) }
             return event
         }) { monitors.append(m) }
         layout()
+        refreshFullScreen()
     }
 
     /// The menu bar's screen. NSScreen.main follows the key window, so the bar would jump
     /// between displays.
     private var screen: NSScreen? { NSScreen.screens.first }
 
+    /// The menu bar's height on the bar's screen, from the last Space that showed it.
+    private var menuBar = 0.0
+
+    /// Puts the panel where the settings, its size and the screen say, with only the window
+    /// calls that change something. A Space change alone changes nothing (DockPlacement).
     private func layout() {
-        guard model.data.settings.dockVisible, let screen else {
-            panel.orderOut(nil)
-            return
+        var target: CGRect?
+        if model.data.settings.dockVisible, let screen {
+            let f = tracker.frame
+            let top = screen.frame.maxY - screen.visibleFrame.maxY
+            if top > 0 { menuBar = top }
+            target = DockPlacement.frame(edge: f.edge, size: f.size, barMid: f.lead + f.geometry.restLength / 2,
+                                         screen: screen.frame, visible: screen.visibleFrame, menuBar: menuBar)
         }
-        let f = tracker.frame
-        let size = f.size
-        let area = screen.visibleFrame
-        // Centre the bar at rest, not the panel: the room at each end can differ.
-        let barMid = f.lead + f.geometry.restLength / 2
-        var origin: NSPoint
-        switch f.edge {
-        case .left: origin = NSPoint(x: area.minX, y: area.midY + barMid - size.height)
-        case .right: origin = NSPoint(x: area.maxX - size.width, y: area.midY + barMid - size.height)
-        case .bottom: origin = NSPoint(x: area.midX - barMid, y: area.minY)
+        for step in DockPlacement.steps(from: panel.isVisible ? panel.frame : nil, to: target) {
+            switch step {
+            case let .setFrame(frame): panel.setFrame(frame, display: true)
+            case .orderFront: panel.orderFrontRegardless()
+            case .orderOut: panel.orderOut(nil)
+            }
         }
-        if f.edge == .bottom {
-            origin.x = min(max(origin.x, screen.frame.minX), screen.frame.maxX - size.width)
-        } else {
-            origin.y = min(max(origin.y, screen.frame.minY), screen.frame.maxY - size.height)
+        if let screen, panel.isVisible {
+            let f = tracker.frame, fr = panel.frame, v = screen.visibleFrame
+            let (lo, hi) = f.edge == .bottom ? (v.minX - fr.minX, v.maxX - fr.minX) : (fr.maxY - v.maxY, fr.maxY - v.minY)
+            let bounds = max(0, lo)...max(max(0, lo), min(f.axisLength, hi))
+            if tracker.labelBounds != bounds { tracker.labelBounds = bounds }
         }
-        panel.setFrame(NSRect(origin: origin, size: size), display: true)
-        panel.orderFrontRegardless()
         pointerMoved()
+        keepWindowsClear()
     }
 
-    private func pointerMoved() {
+    /// While the bar is pinned open on a desktop, windows are kept from sitting under it
+    /// (WindowKeeper). Never from a scratch copy, which must leave the owner's windows alone.
+    private func keepWindowsClear() {
+        guard !tracker.resizing else { return }
+        guard !DataStore.isScratch, model.data.settings.keepsWindowsClear, rule == .pinned, panel.isVisible,
+              let screen, let primary = NSScreen.screens.first?.frame else { keeper.update(nil); return }
+        // Accessibility measures from the top of the menu bar's screen, downward.
+        func flipped(_ r: CGRect) -> CGRect { CGRect(x: r.minX, y: primary.maxY - r.maxY, width: r.width, height: r.height) }
+        let f = tracker.frame
+        keeper.update(.init(strip: WindowClearance.strip(edge: f.edge, panel: flipped(panel.frame), lead: f.lead,
+                                                         length: f.geometry.restLength, depth: DockFrame.inset + f.geometry.thickness),
+                            edge: f.edge, area: flipped(screen.visibleFrame)))
+    }
+
+    /// The window list can trail a Space change, so look again shortly after.
+    private func spaceMayHaveChanged() {
+        refreshFullScreen()
+        keepWindowsClear() // Accessibility may have been allowed since
+        for delay in [0.3, 1.0] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in self?.refreshFullScreen() }
+        }
+    }
+
+    private func refreshFullScreen() {
+        guard let screen else { return }
+        let now = Self.fullScreen(on: screen)
+        guard now != fullScreen else { return }
+        fullScreen = now
+        pointerMoved()
+        keepWindowsClear()
+    }
+
+    /// From the window list's bounds, which need no permission, and the menu bar (FullScreenSpace).
+    private static func fullScreen(on screen: NSScreen) -> Bool {
+        guard let id = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber,
+              let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]]
+        else { return false }
+        let windows = list.compactMap { info -> FullScreenSpace.Window? in
+            guard let layer = info[kCGWindowLayer as String] as? Int,
+                  let dict = info[kCGWindowBounds as String] as? NSDictionary,
+                  let bounds = CGRect(dictionaryRepresentation: dict) else { return nil }
+            return FullScreenSpace.Window(layer: layer, bounds: bounds, alpha: info[kCGWindowAlpha as String] as? Double ?? 1)
+        }
+        return FullScreenSpace.detect(windows: windows, display: CGDisplayBounds(id.uint32Value), topInset: screen.safeAreaInsets.top,
+                                      visibleReachesTop: screen.visibleFrame.maxY >= screen.frame.maxY - 0.5)
+    }
+
+    /// How far a pointer event moved toward the bar's screen edge.
+    private func push(_ event: NSEvent) -> Double {
+        switch tracker.frame.edge {
+        case .left: return -event.deltaX
+        case .right: return event.deltaX
+        case .bottom: return event.deltaY
+        }
+    }
+
+    private func pointerMoved(_ event: NSEvent? = nil) {
         guard panel.isVisible, let screen else { return }
         let now = Date()
         let mouse = NSEvent.mouseLocation, fr = panel.frame
         let (axis, cross) = tracker.frame.bar(CGPoint(x: mouse.x - fr.minX, y: fr.maxY - mouse.y))
         let g = tracker.frame.geometry
         let onBar = g.engages(axis: axis, cross: cross, inset: DockFrame.inset, engaged: tracker.pointer != nil)
-        if var hide = autoHide {
-            let fromEdge: Double
-            switch tracker.frame.edge {
-            case .left: fromEdge = mouse.x - screen.frame.minX
-            case .right: fromEdge = screen.frame.maxX - mouse.x
-            case .bottom: fromEdge = mouse.y - screen.frame.minY
-            }
-            hide.update(.init(atEdge: g.touchesEdge(axis: axis, fromEdge: fromEdge), onBar: onBar,
-                              held: menuOpen || tracker.resizing || tracker.dropTargeted), now: now)
-            autoHide = hide
-            let reveal = hide.visible(at: now)
-            if reveal != tracker.reveal { tracker.reveal = reveal }
-            schedule(hide)
-        } else {
-            frameTimer?.invalidate(); frameTimer = nil
-            decisionTimer?.invalidate(); decisionTimer = nil
-            if tracker.reveal != 1 { tracker.reveal = 1 }
+        let fromEdge: Double
+        switch tracker.frame.edge {
+        case .left: fromEdge = mouse.x - screen.frame.minX
+        case .right: fromEdge = screen.frame.maxX - mouse.x
+        case .bottom: fromEdge = mouse.y - screen.frame.minY
         }
+        visibility.update(.init(atEdge: g.touchesEdge(axis: axis, fromEdge: fromEdge), onBar: onBar,
+                                held: menuOpen || tracker.resizing || tracker.dropTargeted,
+                                pushed: event.map(push) ?? 0 > 0),
+                          rule: rule, now: now)
+        let reveal = visibility.visible(at: now)
+        if reveal != tracker.reveal { tracker.reveal = reveal }
+        schedule(visibility)
         if tracker.resizing {
             panel.ignoresMouseEvents = false
             return
         }
-        let on = onBar && autoHide?.isOut ?? true
+        let on = onBar && visibility.isOut
         if panel.ignoresMouseEvents == on { panel.ignoresMouseEvents = !on }
         let next = on ? axis : nil
         guard next != tracker.pointer else { return }
@@ -287,9 +409,20 @@ final class DockPanelController {
     }
 }
 
-/// What Kairos Bar is drawn on. Liquid Glass does not render in the snapshot tool, so it draws
-/// the material, or a light stand-in for glass in the light appearance.
-enum DockSurface { case glass, material, lightGlassStandIn }
+/// What Kairos Bar is drawn on: the Dock's near-black, or Liquid Glass. Liquid Glass does not
+/// render in the snapshot tool, so it draws the material, or a light stand-in for glass in the
+/// light appearance.
+enum DockSurface { case dark, glass, material, lightGlassStandIn }
+
+/// The macOS Dock's colours in the dark appearance, read from a screenshot of the owner's Dock.
+enum DockInk {
+    static let fill = Color(white: 12 / 255)
+    /// The rim on the bar's horizontal edges; its vertical edges have almost none.
+    static let rimLit = Color(white: 58 / 255)
+    static let rim = Color(white: 22 / 255)
+    static let separator = Color(white: 95 / 255)
+    static let dot = Color(white: 153 / 255)
+}
 
 private struct DockSurfaceKey: EnvironmentKey { static let defaultValue = DockSurface.glass }
 
@@ -354,6 +487,7 @@ struct DockView: View {
     // MARK: Pieces
 
     private var surface: DockSurface {
+        if model.data.settings.barAppearance == .dark { return .dark }
         if case .glass = requestedSurface, #unavailable(macOS 26.0) { return .material }
         return requestedSurface
     }
@@ -364,7 +498,7 @@ struct DockView: View {
     /// in the other colour, for glass that ends up darker or lighter than its appearance.
     private var inkIsLight: Bool {
         switch surface {
-        case .material: return true
+        case .dark, .material: return true
         case .lightGlassStandIn: return false
         case .glass: return scheme == .dark
         }
@@ -374,10 +508,20 @@ struct DockView: View {
 
     private func background(_ f: DockFrame, _ layout: DockGeometry.Layout) -> some View {
         let g = f.geometry
-        let shape = RoundedRectangle(cornerRadius: min(g.thickness * 0.3, 18), style: .continuous)
+        let shape = RoundedRectangle(cornerRadius: g.cornerRadius, style: .continuous)
         let size = f.size(along: layout.end - layout.start, across: g.thickness)
         return Group {
-            if #available(macOS 26.0, *), surface == .glass {
+            if surface == .dark {
+                // Lit from above and below: the rim shows on horizontal edges and fades within
+                // the rounded ends, as on the Dock.
+                let k = min(0.5, g.cornerRadius / size.height)
+                shape.fill(DockInk.fill)
+                    .overlay(shape.strokeBorder(LinearGradient(stops: [
+                        .init(color: DockInk.rimLit, location: 0), .init(color: DockInk.rim, location: k),
+                        .init(color: DockInk.rim, location: 1 - k), .init(color: DockInk.rimLit, location: 1),
+                    ], startPoint: .top, endPoint: .bottom), lineWidth: 1))
+                    .overlay(shape.strokeBorder(.white.opacity(tracker.dropTargeted ? 0.6 : 0)))
+            } else if #available(macOS 26.0, *), surface == .glass {
                 Color.clear.glassEffect(.regular, in: shape)
             } else if surface == .lightGlassStandIn {
                 shape.fill(.white.opacity(0.62))
@@ -530,13 +674,19 @@ struct DockView: View {
             .padding(size * 0.14)
     }
 
-    /// The running dot sits between the icon and the screen edge.
+    /// The running dot sits between the icon and the screen edge, just clear of the icon, as on
+    /// the Dock.
     private func dot(_ item: DockGeometry.Placement, _ f: DockFrame) -> some View {
         let d = f.geometry.icon < 30 ? 3.0 : 4.0
-        return Circle().fill(ink.opacity(0.9)).frame(width: d, height: d)
-            .overlay(Circle().strokeBorder(halo.opacity(0.35), lineWidth: 0.5))
+        return Circle().fill(surface == .dark ? DockInk.dot : ink.opacity(0.9)).frame(width: d, height: d)
+            .overlay(Circle().strokeBorder(halo.opacity(surface == .dark ? 0 : 0.35), lineWidth: 0.5))
             .allowsHitTesting(false)
-            .position(f.point(axis: item.center, cross: DockFrame.inset + f.geometry.padding / 2))
+            .position(f.point(axis: item.center, cross: markCross(f)))
+    }
+
+    /// Across the bar, where the running dot and the active group's mark sit.
+    private func markCross(_ f: DockFrame) -> Double {
+        DockFrame.inset + f.geometry.padding - 0.5
     }
 
     /// The active group gets a short bar where an app gets its running dot, so the two never
@@ -544,22 +694,27 @@ struct DockView: View {
     private func activeMark(_ item: DockGeometry.Placement, _ f: DockFrame) -> some View {
         let d = f.geometry.icon < 30 ? 3.0 : 4.0
         let size = f.size(along: max(10, f.geometry.icon * 0.36), across: d)
-        return Capsule().fill(ink.opacity(0.9))
-            .overlay(Capsule().strokeBorder(halo.opacity(0.35), lineWidth: 0.5))
+        return Capsule().fill(surface == .dark ? DockInk.dot : ink.opacity(0.9))
+            .overlay(Capsule().strokeBorder(halo.opacity(surface == .dark ? 0 : 0.35), lineWidth: 0.5))
             .frame(width: size.width, height: size.height)
             .allowsHitTesting(false)
             .accessibilityHidden(true)
-            .position(f.point(axis: item.center, cross: DockFrame.inset + f.geometry.padding / 2))
+            .position(f.point(axis: item.center, cross: markCross(f)))
     }
 
     /// The line of the divider and the separator: one line in the ink beside a fainter one in
     /// the other colour, so it shows on a light or a dark bar.
     private func rule(_ f: DockFrame) -> some View {
+        if surface == .dark {
+            // One mid-grey point-wide line, about three quarters of the bar's thickness.
+            let line = f.size(along: 1, across: (f.geometry.thickness * 0.73).rounded())
+            return AnyView(Rectangle().fill(DockInk.separator).frame(width: line.width, height: line.height))
+        }
         let line = f.size(along: 1, across: f.geometry.thickness * 0.6)
         let pair = f.edge == .bottom
             ? AnyView(HStack(spacing: 0) { Rectangle().fill(ink.opacity(0.4)); Rectangle().fill(halo.opacity(0.18)) })
             : AnyView(VStack(spacing: 0) { Rectangle().fill(ink.opacity(0.4)); Rectangle().fill(halo.opacity(0.18)) })
-        return pair.frame(width: f.edge == .bottom ? 2 : line.width, height: f.edge == .bottom ? line.height : 2)
+        return AnyView(pair.frame(width: f.edge == .bottom ? 2 : line.width, height: f.edge == .bottom ? line.height : 2))
     }
 
     private func divider(_ f: DockFrame) -> some View {
@@ -601,52 +756,36 @@ struct DockView: View {
         if next != model.data.settings.iconSize { model.data.settings.iconSize = next }
     }
 
+    /// Sized to its text, never cut short, and kept inside the panel and the visible screen
+    /// (DockLabel), which are sized for the widest label.
     private func label(for item: DockGeometry.Placement, _ f: DockFrame) -> some View {
-        let (title, detail) = names(item.slot)
+        let (title, detail) = DockLabels.text(item.slot, data: model.data, blockingOff: model.siteBlockingOff)
         let g = f.geometry
-        let lane = DockFrame.inset + g.padding + item.size + 10
-        let pill = HStack(spacing: 8) {
-            Text(title).lineLimit(1).truncationMode(.tail)
-            if let detail { Text(detail).foregroundStyle(.white.opacity(0.55)).fixedSize() }
+        let lane = DockFrame.inset + g.padding + item.size + DockLabel.gap
+        let bounds = tracker.labelBounds ?? 0...f.axisLength
+        let pill = HStack(spacing: DockLabels.spacing) {
+            Text(title).lineLimit(1)
+            if let detail { Text(detail).lineLimit(1).foregroundStyle(.white.opacity(0.55)) }
         }
-        .font(.system(size: 13, weight: .medium))
+        .font(Font(DockLabels.font))
         .foregroundStyle(.white)
-        .padding(.horizontal, 11)
-        .frame(height: 26)
+        .padding(.horizontal, DockLabels.padding)
+        .frame(height: DockLabels.height)
+        .fixedSize()
         .background(Color(white: 0.12).opacity(0.86), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous).strokeBorder(.white.opacity(0.14)))
         .shadow(color: .black.opacity(0.25), radius: 4, y: 1)
         .allowsHitTesting(false)
-        // A box the label sizes itself inside, pinned to the side away from the screen edge.
-        let room: CGSize, alignment: Alignment, center: CGPoint
         switch f.edge {
         case .left, .right:
-            let width = f.crossLength - lane - 4
-            room = CGSize(width: width, height: 30)
-            alignment = f.edge == .left ? .leading : .trailing
-            center = f.point(axis: item.center, cross: lane + width / 2)
+            // Pinned to the side away from the screen edge, in a lane as wide as the widest label.
+            let along = DockLabel.center(item: f.lead + item.center, width: DockLabels.height, within: bounds)
+            let width = f.crossLength - lane - DockLabel.margin
+            let center = f.point(axis: along - f.lead, cross: lane + width / 2)
+            return AnyView(pill.frame(width: width, height: 30, alignment: f.edge == .left ? .leading : .trailing).position(center))
         case .bottom:
-            // Centred over the icon, as wide as the panel allows on both sides.
-            let x = f.lead + item.center
-            room = CGSize(width: max(40, min(320, 2 * min(x, f.axisLength - x) - 4)), height: 30)
-            alignment = .center
-            center = CGPoint(x: x, y: f.crossLength - lane - 15)
-        }
-        return pill.frame(width: room.width, height: room.height, alignment: alignment).position(center)
-    }
-
-    private func names(_ slot: DockGeometry.Slot) -> (String, String?) {
-        switch slot {
-        case let .group(id):
-            let index = model.data.groups.firstIndex { $0.id == id } ?? 0
-            let shortcut = model.data.settings.groupHotkeys && index < 9 ? "⌃\(index + 1)" : nil
-            if id == model.data.focus.activeGroupId, model.siteBlockingOff { return (model.data.group(id)?.name ?? "", "Site blocking off") }
-            return (model.data.group(id)?.name ?? "", shortcut)
-        case .newGroup: return ("New Group…", nil)
-        case .divider, .separator: return ("", nil)
-        case let .app(bundleId), let .running(bundleId): return (Apps.name(bundleId), nil)
-        case let .folder(folder): return (folder.name, nil)
-        case .addApp: return ("Add Apps to \(model.activeGroup?.name ?? "Group")…", nil)
+            let x = DockLabel.center(item: f.lead + item.center, width: DockLabels.width(title, detail), within: bounds)
+            return AnyView(pill.position(x: x, y: f.crossLength - lane - 15))
         }
     }
 
@@ -659,6 +798,11 @@ struct DockView: View {
         Button("Edit Groups…") { DockActions.editGroups(model, nil) }
         Divider()
         Toggle("Automatically Hide and Show", isOn: $model.data.settings.autoHideBar)
+        Toggle("Hide in Full-Screen Apps", isOn: model.hidesInFullScreenBinding)
+            .disabled(model.data.settings.autoHideBar)
+        Picker("Appearance", selection: $model.data.settings.barAppearance) {
+            ForEach(BarAppearance.allCases, id: \.self) { Text($0.label).tag($0) }
+        }
         Picker("Position on Screen", selection: $model.data.settings.dockEdge) {
             ForEach(DockEdge.allCases, id: \.self) { Text($0.rawValue.capitalized).tag($0) }
         }

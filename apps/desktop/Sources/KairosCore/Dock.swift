@@ -58,10 +58,14 @@ public struct DockGeometry: Equatable, Sendable {
 
     public static let dividerLength = 11.0
     public var gap: Double { max(3, (icon * 0.14).rounded()) }
-    public var padding: Double { max(4, (icon * 0.16).rounded()) }
+    /// The Dock keeps about 7 pt between its icons and its edges at small sizes, growing with
+    /// larger icons: 24 pt icons make a bar 38 pt thick, as the owner's Dock is 1.6 times its icons.
+    public var padding: Double { max(7, (icon * 0.2).rounded()) }
     /// How far from the pointer, along the axis, an icon still grows.
     public var range: Double { icon * 2.5 }
     public var thickness: Double { icon + 2 * padding }
+    /// The Dock's ends are rounded to about a third of its thickness.
+    public var cornerRadius: Double { (thickness / 3).rounded() }
     /// How far a magnified icon reaches past the bar, away from the screen edge.
     public var headroom: Double { (maxScale - 1) * icon }
 

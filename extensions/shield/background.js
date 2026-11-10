@@ -1,7 +1,7 @@
 // Kairos Shield service worker: holds the focus state, turns it into blocking rules,
 // and relays Jev checks and overrides to Kairos Desktop.
 import { createBridge, describeConnection } from "./lib/bridge.js";
-import { EMPTY_STATE, hostnameOf, normalizeDomain, sanitizeState, siteVerdict, strictLockUntil } from "./lib/match.js";
+import { EMPTY_STATE, hostnameOf, normalizeDomain, ruleLockText, sanitizeState, siteVerdict, strictLockUntil } from "./lib/match.js";
 import {
   JEV_TIMEOUT_MS,
   buildDnrRules,
@@ -271,6 +271,10 @@ async function addSiteRule(host, list) {
 async function removeElementRule(host, selector) {
   const domain = normalizeDomain(host);
   if (!domain || typeof selector !== "string") return { ok: false };
+  // Showing an element again loosens the rules, which a locked strict phase does not allow
+  // (Kairos Desktop refuses rule.removeElement until then too).
+  const locked = strictLockUntil(appState);
+  if (locked) return { ok: false, lockedUntil: locked, message: ruleLockText(locked) };
   // The app keeps its own copy and pushes it back in hiddenElements, so it has to forget it too.
   // Until it pushes a state without it, drop it from the copy held here so the page updates now.
   localElements = withoutElement(localElements, domain, selector);
@@ -312,6 +316,7 @@ async function handle(msg, sender) {
         connection: describeConnection(connected, problem),
         manualMode,
         lockedUntil: connected ? null : strictLockUntil(appState),
+        rulesLockedUntil: strictLockUntil(appState),
         host,
         site: normalizeDomain(host),
         verdict: siteVerdict(msg.url || "", state),
