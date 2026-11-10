@@ -384,11 +384,15 @@ final class AppModel: ObservableObject {
         if next.desktop > 0 { AppDelegate.shared?.switchDesktop(next.desktop) }
         sweepSoon()
 
-        guard data.settings.switchBehavior == .hide else { return }
+        let behavior = data.settings.switchBehavior
+        guard behavior != .leave else { return }
         let apps = NSWorkspace.shared.runningApplications.filter { $0.activationPolicy == .regular }
         let visible = apps.filter { !$0.isHidden }.compactMap(\.bundleIdentifier)
-        let plan = GroupSwitch.plan(visible: visible, keep: Set(next.dockApps + ["com.apple.finder", Bundle.main.bundleIdentifier ?? ""]),
-                                    restore: hiddenBySwitch.removeValue(forKey: id) ?? [])
+        // "Hide the apps that group blocks" hides a blocked app even when it is pinned there.
+        let always = ["com.apple.finder", Bundle.main.bundleIdentifier ?? ""]
+        let plan = GroupSwitch.plan(visible: visible, keep: Set(behavior == .hide ? next.dockApps + always : always),
+                                    restore: hiddenBySwitch.removeValue(forKey: id) ?? [],
+                                    only: behavior == .hideBlocked ? Set(next.blockedApps) : nil)
         for bid in plan.unhide { apps.first { $0.bundleIdentifier == bid }?.unhide() }
         let hidden = plan.hide.filter { bid in apps.first { $0.bundleIdentifier == bid }?.hide() == true }
         if let previous { hiddenBySwitch[previous.id] = hidden }

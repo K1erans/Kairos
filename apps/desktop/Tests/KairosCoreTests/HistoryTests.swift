@@ -118,4 +118,12 @@ final class HistoryTests: XCTestCase {
         XCTAssertEqual(plan.unhide, ["com.apple.mail"])
         XCTAssertEqual(plan.hide, ["com.spotify.client"])
     }
+
+    func testHidingOnlyTheBlockedAppsLeavesEveryOtherAppAlone() {
+        // Study blocks Discord: switching to it hides Discord and nothing else, pinned or not.
+        let plan = GroupSwitch.plan(visible: ["com.hnc.Discord", "com.spotify.client", "com.apple.Safari"],
+                                    keep: ["com.apple.finder"], restore: [], only: ["com.hnc.Discord", "com.apple.mail"])
+        XCTAssertEqual(plan.hide, ["com.hnc.Discord"])
+        XCTAssertEqual(SwitchBehavior(rawValue: "hideBlocked"), .hideBlocked)
+    }
 }

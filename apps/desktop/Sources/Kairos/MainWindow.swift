@@ -904,6 +904,10 @@ struct SettingsPage: View {
                 Picker("When switching group", selection: $model.data.settings.switchBehavior) {
                     ForEach(SwitchBehavior.allCases, id: \.self) { Text($0.label).tag($0) }
                 }
+                if model.data.settings.switchBehavior == .hideBlocked {
+                    Text("Switching to a group hides its blocked apps even if they are open, with the timer off too. Choose them under Rules > Blocked apps. They come back when you return to the group you left.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
                 Picker("Quick add", selection: $model.data.settings.quickAddHotkey) {
                     ForEach(Hotkeys.quickAdd) { Text($0.label).tag($0.id) }
                     Text("Off").tag(Hotkeys.off)

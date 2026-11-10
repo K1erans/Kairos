@@ -17,8 +17,16 @@ public enum Mode: String, Codable, CaseIterable, Sendable {
 }
 
 public enum SwitchBehavior: String, Codable, CaseIterable, Sendable {
-    case leave, hide
-    public var label: String { self == .leave ? "Leave other apps alone" : "Hide apps outside the group" }
+    /// `hideBlocked` hides only the apps the new group blocks; `hide` hides every app that is
+    /// not pinned to it.
+    case leave, hideBlocked, hide
+    public var label: String {
+        switch self {
+        case .leave: return "Leave other apps alone"
+        case .hideBlocked: return "Hide the apps that group blocks"
+        case .hide: return "Hide every app outside the group"
+        }
+    }
 }
 
 public struct AppGroup: Codable, Identifiable, Hashable, Sendable {

@@ -107,8 +107,9 @@ public enum GroupSwitch {
     /// `visible` are the regular apps on screen now. Apps hidden when the new group was last
     /// left come back first, and stay: they belong to that group's workspace. Then everything
     /// else outside `keep` is hidden.
-    public static func plan(visible: [String], keep: Set<String>, restore: [String]) -> (unhide: [String], hide: [String]) {
+    /// With `only` set, nothing outside it is hidden: that is "hide the apps the group blocks".
+    public static func plan(visible: [String], keep: Set<String>, restore: [String], only: Set<String>? = nil) -> (unhide: [String], hide: [String]) {
         let back = Set(restore)
-        return (restore, visible.filter { !keep.contains($0) && !back.contains($0) })
+        return (restore, visible.filter { !keep.contains($0) && !back.contains($0) && (only?.contains($0) ?? true) })
     }
 }
