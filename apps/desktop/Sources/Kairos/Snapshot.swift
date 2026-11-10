@@ -64,6 +64,23 @@ enum Snapshot {
             dock("\(edge.rawValue)-36-autohide-revealed", pointer: .app("com.apple.Safari"))
         }
         model.data.settings.autoHideBar = false
+        // Name labels over the first and last slot, short and long, never cut short (DockLabel).
+        model.data.settings.iconSize = 24
+        model.data.settings.groupHotkeys = true
+        for edge in DockEdge.allCases {
+            model.data.settings.dockEdge = edge
+            dock("\(edge.rawValue)-24-label-first-short", pointer: .group(work.id))
+            model.data.groups[0].name = "Quarterly Planning and Reviews"
+            dock("\(edge.rawValue)-24-label-first-long", pointer: .group(work.id))
+            model.data.groups[0].name = work.name
+            dock("\(edge.rawValue)-24-label-last-trash", pointer: .folder(.trash))
+            model.data.settings.showsDockFolders = false
+            model.showRunningForSnapshot(["com.microsoft.VSCodeInsiders"])
+            dock("\(edge.rawValue)-24-label-last-long", pointer: .running("com.microsoft.VSCodeInsiders"))
+            model.showRunningForSnapshot([])
+            model.data.settings.showsDockFolders = true
+        }
+        model.data.settings.groupHotkeys = false
         model.data.settings.dockEdge = .left
         model.data.settings.iconSize = 64
         dock("left-64-hover-app", pointer: .app("com.apple.Notes"))

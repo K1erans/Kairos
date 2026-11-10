@@ -36,22 +36,34 @@ struct DockFrame: Equatable {
         motion = DockMotion(reduced: inputs.reduceMotion)
         geometry = DockGeometry(slots: inputs.slots, icon: inputs.icon, maxScale: motion.maxScale)
         edge = inputs.edge
-        (lead, trail) = geometry.overflow
+        labelWidth = inputs.labelWidth
+        var (lead, trail) = geometry.overflow
+        // A bottom bar's labels run along it, so the panel is at least as long as the widest.
+        if edge == .bottom {
+            let grow = DockLabel.growth(length: lead + geometry.restLength + trail, widest: labelWidth)
+            lead += grow
+            trail += grow
+        }
+        (self.lead, self.trail) = (lead, trail)
     }
 
     /// What the frame depends on, compared before building one, because `overflow` samples
     /// every pointer position.
     struct Inputs: Equatable {
         let slots: [DockGeometry.Slot], icon: Double, edge: DockEdge, reduceMotion: Bool
+        /// The widest name label any slot can show.
+        let labelWidth: Double
         init(data: AppData, running: [String], reduceMotion: Bool) {
             slots = DockGeometry.slots(for: data, running: running)
             icon = data.settings.iconSize
             edge = data.settings.dockEdge
             self.reduceMotion = reduceMotion
+            labelWidth = DockLabels.widest(slots, data: data)
         }
     }
 
-    var labelLane: Double { edge == .bottom ? 44 : 220 }
+    let labelWidth: Double
+    var labelLane: Double { edge == .bottom ? 44 : DockLabel.sideLane(widest: labelWidth) }
     var axisLength: Double { lead + geometry.restLength + trail }
     var crossLength: Double { Self.inset + geometry.thickness + geometry.headroom + labelLane }
     var size: CGSize { edge == .bottom ? CGSize(width: axisLength, height: crossLength) : CGSize(width: crossLength, height: axisLength) }
@@ -78,6 +90,43 @@ struct DockFrame: Equatable {
     }
 }
 
+/// The text of Kairos Bar's name labels, and how wide each draws, measured with the font it
+/// draws in so the panel can make room for the widest.
+enum DockLabels {
+    static let font = NSFont.systemFont(ofSize: 13, weight: .medium)
+    static let height = 26.0
+    static let padding = 11.0
+    static let spacing = 8.0
+
+    static func text(_ slot: DockGeometry.Slot, data: AppData, blockingOff: Bool) -> (title: String, detail: String?) {
+        switch slot {
+        case let .group(id):
+            let index = data.groups.firstIndex { $0.id == id } ?? 0
+            let name = data.group(id)?.name ?? ""
+            if id == data.focus.activeGroupId, blockingOff { return (name, "Site blocking off") }
+            return (name, data.settings.groupHotkeys && index < 9 ? "\u{2303}\(index + 1)" : nil)
+        case .newGroup: return ("New Group\u{2026}", nil)
+        case .divider, .separator: return ("", nil)
+        case let .app(bundleId), let .running(bundleId): return (Apps.name(bundleId), nil)
+        case let .folder(folder): return (folder.name, nil)
+        case .addApp: return ("Add Apps to \(data.activeGroup?.name ?? "Group")\u{2026}", nil)
+        }
+    }
+
+    static func width(_ title: String, _ detail: String?) -> Double {
+        func measure(_ s: String) -> Double { ceil((s as NSString).size(withAttributes: [.font: font]).width) }
+        return 2 * padding + measure(title) + (detail.map { spacing + measure($0) } ?? 0) + 2
+    }
+
+    /// The widest label any of `slots` can show, counting the active group's longest note.
+    static func widest(_ slots: [DockGeometry.Slot], data: AppData) -> Double {
+        slots.map { slot in
+            let t = text(slot, data: data, blockingOff: true)
+            return t.title.isEmpty ? 0 : width(t.title, t.detail)
+        }.max() ?? 0
+    }
+}
+
 /// Pointer and frame state shared by the controller and the view.
 @MainActor
 final class DockTracker: ObservableObject {
@@ -89,6 +138,8 @@ final class DockTracker: ObservableObject {
     @Published var dropTargeted = false
     /// How much of the bar is on screen: 1 unless auto-hide has slid it off its edge.
     @Published var reveal: Double
+    /// The part of the panel along the bar that is on the visible screen, which labels stay in.
+    @Published var labelBounds: ClosedRange<Double>?
     /// Apps clicked on the bar that are still starting, which pulse.
     @Published var launches = DockLaunches()
     @Published var trashFull = false
@@ -230,6 +281,12 @@ final class DockPanelController {
             case .orderFront: panel.orderFrontRegardless()
             case .orderOut: panel.orderOut(nil)
             }
+        }
+        if let screen, panel.isVisible {
+            let f = tracker.frame, fr = panel.frame, v = screen.visibleFrame
+            let (lo, hi) = f.edge == .bottom ? (v.minX - fr.minX, v.maxX - fr.minX) : (fr.maxY - v.maxY, fr.maxY - v.minY)
+            let bounds = max(0, lo)...max(max(0, lo), min(f.axisLength, hi))
+            if tracker.labelBounds != bounds { tracker.labelBounds = bounds }
         }
         pointerMoved()
         keepWindowsClear()
@@ -666,52 +723,36 @@ struct DockView: View {
         if next != model.data.settings.iconSize { model.data.settings.iconSize = next }
     }
 
+    /// Sized to its text, never cut short, and kept inside the panel and the visible screen
+    /// (DockLabel), which are sized for the widest label.
     private func label(for item: DockGeometry.Placement, _ f: DockFrame) -> some View {
-        let (title, detail) = names(item.slot)
+        let (title, detail) = DockLabels.text(item.slot, data: model.data, blockingOff: model.siteBlockingOff)
         let g = f.geometry
-        let lane = DockFrame.inset + g.padding + item.size + 10
-        let pill = HStack(spacing: 8) {
-            Text(title).lineLimit(1).truncationMode(.tail)
-            if let detail { Text(detail).foregroundStyle(.white.opacity(0.55)).fixedSize() }
+        let lane = DockFrame.inset + g.padding + item.size + DockLabel.gap
+        let bounds = tracker.labelBounds ?? 0...f.axisLength
+        let pill = HStack(spacing: DockLabels.spacing) {
+            Text(title).lineLimit(1)
+            if let detail { Text(detail).lineLimit(1).foregroundStyle(.white.opacity(0.55)) }
         }
-        .font(.system(size: 13, weight: .medium))
+        .font(Font(DockLabels.font))
         .foregroundStyle(.white)
-        .padding(.horizontal, 11)
-        .frame(height: 26)
+        .padding(.horizontal, DockLabels.padding)
+        .frame(height: DockLabels.height)
+        .fixedSize()
         .background(Color(white: 0.12).opacity(0.86), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous).strokeBorder(.white.opacity(0.14)))
         .shadow(color: .black.opacity(0.25), radius: 4, y: 1)
         .allowsHitTesting(false)
-        // A box the label sizes itself inside, pinned to the side away from the screen edge.
-        let room: CGSize, alignment: Alignment, center: CGPoint
         switch f.edge {
         case .left, .right:
-            let width = f.crossLength - lane - 4
-            room = CGSize(width: width, height: 30)
-            alignment = f.edge == .left ? .leading : .trailing
-            center = f.point(axis: item.center, cross: lane + width / 2)
+            // Pinned to the side away from the screen edge, in a lane as wide as the widest label.
+            let along = DockLabel.center(item: f.lead + item.center, width: DockLabels.height, within: bounds)
+            let width = f.crossLength - lane - DockLabel.margin
+            let center = f.point(axis: along - f.lead, cross: lane + width / 2)
+            return AnyView(pill.frame(width: width, height: 30, alignment: f.edge == .left ? .leading : .trailing).position(center))
         case .bottom:
-            // Centred over the icon, as wide as the panel allows on both sides.
-            let x = f.lead + item.center
-            room = CGSize(width: max(40, min(320, 2 * min(x, f.axisLength - x) - 4)), height: 30)
-            alignment = .center
-            center = CGPoint(x: x, y: f.crossLength - lane - 15)
-        }
-        return pill.frame(width: room.width, height: room.height, alignment: alignment).position(center)
-    }
-
-    private func names(_ slot: DockGeometry.Slot) -> (String, String?) {
-        switch slot {
-        case let .group(id):
-            let index = model.data.groups.firstIndex { $0.id == id } ?? 0
-            let shortcut = model.data.settings.groupHotkeys && index < 9 ? "⌃\(index + 1)" : nil
-            if id == model.data.focus.activeGroupId, model.siteBlockingOff { return (model.data.group(id)?.name ?? "", "Site blocking off") }
-            return (model.data.group(id)?.name ?? "", shortcut)
-        case .newGroup: return ("New Group…", nil)
-        case .divider, .separator: return ("", nil)
-        case let .app(bundleId), let .running(bundleId): return (Apps.name(bundleId), nil)
-        case let .folder(folder): return (folder.name, nil)
-        case .addApp: return ("Add Apps to \(model.activeGroup?.name ?? "Group")…", nil)
+            let x = DockLabel.center(item: f.lead + item.center, width: DockLabels.width(title, detail), within: bounds)
+            return AnyView(pill.position(x: x, y: f.crossLength - lane - 15))
         }
     }
 
