@@ -108,6 +108,8 @@ enum Snapshot {
         // Open apps: running dots, and an app that is not in the group after a separator.
         model.showRunningForSnapshot(["com.apple.Safari", "com.apple.Notes", "com.hnc.Discord"])
         dock("left-36-running")
+        model.data.settings.dockEdge = .right
+        dock("right-36-running")
         model.data.settings.dockEdge = .bottom
         dock("bottom-36-running")
         // The owner's bar: bottom edge, 24 pt icons, apps open, Dark (the default) and Liquid Glass.
