@@ -421,11 +421,19 @@ final class AppModel: ObservableObject {
 
     /// A binding to one group found by id, so a view showing a group that gets deleted reads a
     /// stale copy instead of indexing past the end of the array.
+    /// Edits that would loosen the active group's rules during a locked strict phase are refused
+    /// (RuleLock); the Rules page disables those controls and shows `ruleLock(for:)`.
     func groupBinding(_ id: UUID) -> Binding<AppGroup> {
         let fallback = data.group(id) ?? AppGroup(name: "")
         return Binding(
             get: { self.data.group(id) ?? fallback },
-            set: { g in if let i = self.data.groups.firstIndex(where: { $0.id == id }) { self.data.groups[i] = g } })
+            set: { g in self.data.updateGroup(id, strictLocked: self.strictLocked) { $0 = g } })
+    }
+
+    /// Why a group's rules can only get stricter right now, or nil when they can change freely.
+    func ruleLock(for id: UUID) -> String? {
+        guard strictLocked, id == data.activeGroup?.id else { return nil }
+        return RuleLock.note(until: data.focus.strictUntil)
     }
 
     func addDockApp(_ bundleId: String, to groupId: UUID? = nil) {
@@ -774,17 +782,15 @@ final class AppModel: ObservableObject {
                 reply(["type": "override.result", "allowed": false, "remaining": overridesLeft, "message": refusal.rawValue])
             }
         case "rule.addElement":
-            let host = Rules.normalizeSite(str("host")), selector = str("selector")
-            guard !host.isEmpty, !selector.isEmpty else { return }
-            data.updateActiveGroup { $0.hideElement(selector, on: host) }
+            data.setElementHidden(str("selector"), on: str("host"), true, strictLocked: strictLocked)
         case "rule.addSite":
             guard let list = SiteList(rawValue: str("list")) else { return }
             // A refused allow (Strict) changes nothing; the push tells the extension so.
             if !data.addSite(str("site"), to: list, strictLocked: strictLocked) { pushState(force: true) }
         case "rule.removeElement":
-            let host = Rules.normalizeSite(str("host")), selector = str("selector")
-            guard !host.isEmpty, !selector.isEmpty else { return }
-            data.updateActiveGroup { $0.showElement(selector, on: host) }
+            // Refused during a locked strict phase: the push puts the element back in the
+            // extension's copy, so it stays hidden.
+            if !data.setElementHidden(str("selector"), on: str("host"), false, strictLocked: strictLocked) { pushState(force: true) }
         case "read.status":
             let state = str("state")
             readStatus = state == "stopped" ? nil : ReadStatus(state: state, title: str("title"))

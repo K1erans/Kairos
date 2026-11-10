@@ -55,13 +55,14 @@ trap 'rm -rf "$WORK"' EXIT
 cp "$HERE/StrictMode.tla" "$WORK/"
 run() {
   local label="$1" inv="$2"; shift 2
-  local refuses=TRUE checks=TRUE syncs=TRUE picker=TRUE resets=TRUE locks=TRUE quit=TRUE resumes=TRUE
+  local refuses=TRUE checks=TRUE syncs=TRUE picker=TRUE resets=TRUE locks=TRUE quit=TRUE resumes=TRUE rules=TRUE
   for kv in "$@"; do
     case "$kv" in
       LedgerRefusesStrict=*) refuses="${kv#*=}";; LedgerChecksMax=*) checks="${kv#*=}";;
       SyncsModeFromTimer=*) syncs="${kv#*=}";; PickerLockedByTimer=*) picker="${kv#*=}";;
       ResetsOnEnterStrict=*) resets="${kv#*=}";; LocksStrictControls=*) locks="${kv#*=}";;
       QuitLocked=*) quit="${kv#*=}";; ResumesStrict=*) resumes="${kv#*=}";;
+      LocksRules=*) rules="${kv#*=}";;
     esac
   done
   cat > "$WORK/$label.cfg" <<CFG
@@ -76,6 +77,7 @@ CONSTANTS
   LocksStrictControls = $locks
   QuitLocked = $quit
   ResumesStrict = $resumes
+  LocksRules = $rules
 CONSTRAINT Bound
 INVARIANT $inv
 CFG
@@ -117,6 +119,7 @@ if [ "${1:-}" = "--mutants" ]; then
   expect FAIL mutant-skip-stop-unlocked  StrictNoEscape   LocksStrictControls=FALSE
   expect FAIL mutant-quit-unlocked       QuitRefusedInStrict QuitLocked=FALSE
   expect FAIL mutant-no-resume           StrictNoEscape   ResumesStrict=FALSE
+  expect FAIL mutant-rules-unlocked      StrictRulesHold  LocksRules=FALSE
 fi
 
 [ $status = 0 ] && echo "Result: matches expected.tsv." || echo "Result: DIFFERS from expected.tsv."

@@ -27,3 +27,11 @@ apps/desktop/Sources/Kairos/AppModel.swift	1	if let resume { engine.resumeStrict
 apps/desktop/Sources/KairosCore/Tempo.swift	1	holdsStrict = true	holds' = TRUE in Relaunch
 apps/desktop/Sources/KairosCore/Tempo.swift	1	if waitsAfterBreak, finished.isBreak {	Halt("BreakOver") in TimeUp
 apps/desktop/Sources/Kairos/AppModel.swift	1	case .stopped, .awaitingFocus:	mode' = "off" in Halt, for BreakOver as for Stop
+apps/desktop/Sources/KairosCore/Rules.swift	1	guard g != groups[i], !(locked && RuleLock.loosens(groups[i], to: g)) else { return false }	LocksRules in EditRules
+apps/desktop/Sources/KairosCore/Rules.swift	1	let locked = strictLocked && id == activeGroup?.id	EditRules (the active group's rules, which are the ones in force)
+apps/desktop/Sources/KairosCore/Rules.swift	3	return updateGroup(id, strictLocked: strictLocked) { g in	EditRules (addSite, setAppBlocked, setElementHidden)
+apps/desktop/Sources/Kairos/AppModel.swift	1	set: { g in self.data.updateGroup(id, strictLocked: self.strictLocked) { $0 = g } })	EditRules (the Rules page)
+apps/desktop/Sources/Kairos/AppModel.swift	2	data.setElementHidden(str("selector"), on: str("host"),	EditRules (rule.addElement, rule.removeElement)
+apps/desktop/Sources/Kairos/AppModel.swift	1	if !data.addSite(str("site"), to: list, strictLocked: strictLocked) { pushState(force: true) }	EditRules (rule.addSite)
+apps/desktop/Sources/Kairos/AppModel.swift	1	if data.setAppBlocked(bundleId, blocked, strictLocked: strictLocked), blocked { sweepSoon() }	EditRules (Kairos Bar's Block in <group>)
+apps/desktop/Sources/Kairos/AppModel.swift	1	guard id != data.focus.activeGroupId, let next = data.group(id) else { return }	SwitchGroup (no strict guard: StrictKeepsGroup)

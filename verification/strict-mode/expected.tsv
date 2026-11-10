@@ -4,3 +4,5 @@ ModeMatchesTimer	PASS
 StrictNoGrant	PASS	
 StrictNoEscape	PASS	
 QuitRefusedInStrict	PASS	
+StrictRulesHold	PASS	
+StrictKeepsGroup	FAIL	switching to a group that blocks less (or deleting the active group) is not refused in a strict focus phase

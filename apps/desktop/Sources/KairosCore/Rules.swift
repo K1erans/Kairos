@@ -109,37 +109,83 @@ public enum SiteList: String, Sendable {
     case block, allow
 }
 
+/// While a strict focus phase is locked, the active group's rules can block more but never less:
+/// no blocked site, app or hidden element comes off, no site is allowed, and Jev cannot be turned
+/// off or made slower to block. Adding blocks is always fine.
+public enum RuleLock {
+    /// Whether going from `old` to `new` lets through anything `old` stopped.
+    public static func loosens(_ old: AppGroup, to new: AppGroup) -> Bool {
+        !Set(old.blockSites).isSubset(of: new.blockSites)
+            || !Set(new.allowSites).isSubset(of: old.allowSites)
+            || !Set(old.blockedApps).isSubset(of: new.blockedApps)
+            || old.hiddenElements.contains { host, selectors in !Set(selectors).isSubset(of: new.hiddenElements[host] ?? []) }
+            || (old.jevEnabled && (!new.jevEnabled || new.jevThreshold > old.jevThreshold))
+    }
+
+    /// The line shown where the loosening controls are while the lock holds.
+    public static func note(until: Date?) -> String {
+        guard let until else { return "Strict focus: you can block more, but nothing can be unblocked or allowed until this session ends." }
+        return "Strict focus until \(until.formatted(date: .omitted, time: .shortened)): you can block more, but nothing can be unblocked or allowed until then."
+    }
+}
+
 extension AppData {
-    /// `rule.addSite`: Kairos Shield's "Block this site" and the Jev overlay's "Always allow".
-    /// The site goes on one list of the active group and off the other. An allow loosens
-    /// blocking, so like an "Allow" override it is refused while a strict focus phase is locked.
-    /// Returns false when nothing changed.
+    /// Every change to a group's rules goes through here. While a strict focus phase is locked a
+    /// change to the active group that loosens its rules (RuleLock) is refused as a whole.
+    /// Returns false when refused or when nothing changed.
     @discardableResult
-    public mutating func addSite(_ raw: String, to list: SiteList, strictLocked: Bool) -> Bool {
-        let site = Rules.normalizeSite(raw)
-        guard !site.isEmpty, !(list == .allow && strictLocked), let group = activeGroup else { return false }
-        var g = group
-        switch list {
-        case .block:
-            g.allowSites.removeAll { $0 == site }
-            if !g.blockSites.contains(site) { g.blockSites.append(site) }
-        case .allow:
-            g.blockSites.removeAll { $0 == site }
-            if !g.allowSites.contains(site) { g.allowSites.append(site) }
-        }
-        guard g != group else { return false }
-        updateActiveGroup { $0 = g }
+    public mutating func updateGroup(_ id: UUID, strictLocked: Bool, _ change: (inout AppGroup) -> Void) -> Bool {
+        guard let i = groups.firstIndex(where: { $0.id == id }) else { return false }
+        var g = groups[i]
+        change(&g)
+        let locked = strictLocked && id == activeGroup?.id
+        guard g != groups[i], !(locked && RuleLock.loosens(groups[i], to: g)) else { return false }
+        groups[i] = g
         return true
     }
 
-    /// "Block in <group>" from Kairos Bar. Unblocking loosens blocking, so it waits while a strict
-    /// focus phase is locked. Returns false when nothing changed.
+    /// `rule.addSite`: Kairos Shield's "Block this site" and the Jev overlay's "Always allow".
+    /// The site goes on one list of the active group and off the other. Returns false when
+    /// nothing changed, or when it was an allow during a locked strict phase.
+    @discardableResult
+    public mutating func addSite(_ raw: String, to list: SiteList, strictLocked: Bool) -> Bool {
+        let site = Rules.normalizeSite(raw)
+        guard !site.isEmpty, let id = activeGroup?.id else { return false }
+        return updateGroup(id, strictLocked: strictLocked) { g in
+            switch list {
+            case .block:
+                g.allowSites.removeAll { $0 == site }
+                if !g.blockSites.contains(site) { g.blockSites.append(site) }
+            case .allow:
+                g.blockSites.removeAll { $0 == site }
+                if !g.allowSites.contains(site) { g.allowSites.append(site) }
+            }
+        }
+    }
+
+    /// "Block in <group>" from Kairos Bar. Unblocking waits while a strict focus phase is locked.
+    /// Returns false when nothing changed.
     @discardableResult
     public mutating func setAppBlocked(_ bundleId: String, _ blocked: Bool, strictLocked: Bool) -> Bool {
-        guard let group = activeGroup, group.blockedApps.contains(bundleId) != blocked, blocked || !strictLocked else { return false }
-        updateActiveGroup { g in
-            if blocked { g.blockedApps.append(bundleId) } else { g.blockedApps.removeAll { $0 == bundleId } }
+        guard let id = activeGroup?.id else { return false }
+        return updateGroup(id, strictLocked: strictLocked) { g in
+            if blocked {
+                if !g.blockedApps.contains(bundleId) { g.blockedApps.append(bundleId) }
+            } else {
+                g.blockedApps.removeAll { $0 == bundleId }
+            }
         }
-        return true
+    }
+
+    /// `rule.addElement` and `rule.removeElement` from Kairos Shield, on the active group.
+    /// Showing a hidden element again waits while a strict focus phase is locked. Returns false
+    /// when nothing changed.
+    @discardableResult
+    public mutating func setElementHidden(_ selector: String, on rawHost: String, _ hidden: Bool, strictLocked: Bool) -> Bool {
+        let host = Rules.normalizeSite(rawHost)
+        guard !host.isEmpty, !selector.isEmpty, let id = activeGroup?.id else { return false }
+        return updateGroup(id, strictLocked: strictLocked) { g in
+            if hidden { g.hideElement(selector, on: host) } else { g.showElement(selector, on: host) }
+        }
     }
 }

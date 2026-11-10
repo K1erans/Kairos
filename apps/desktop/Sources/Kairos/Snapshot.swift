@@ -160,6 +160,15 @@ enum Snapshot {
         model.showTimerForSnapshot(waiting)
         model.setMode(.off) // apply(.awaitingFocus) turns the mode off
         shot("main-today-break-over", size: CGSize(width: 1000, height: 660), MainWindow())
+        // Strict focus 10 minutes in: the Rules page can add blocks but not remove them.
+        var strict = TempoEngine(preset: preset)
+        strict.start(.focus, strict: true, now: model.now.addingTimeInterval(-600))
+        model.showTimerForSnapshot(strict)
+        model.data.groups[0].hiddenElements = ["youtube.com": ["#related"]]
+        model.page = .rules
+        model.selectedGroupId = work.id
+        shot("main-rules-strict", size: CGSize(width: 1000, height: 900), MainWindow())
+        model.data.groups[0].hiddenElements = [:]
         model.showTimerForSnapshot(TempoEngine(preset: preset))
         model.setMode(.off)
         let added = model.addGroup()

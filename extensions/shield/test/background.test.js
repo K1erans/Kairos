@@ -50,6 +50,24 @@ test("Show on a hidden element asks the app to forget it and unhides it at once"
   assert.ok(!info.selectors.includes("#promo"), "hidden right away, before the app pushes a new state");
 });
 
+test("a locked strict phase keeps hidden elements hidden", async (t) => {
+  const until = Date.now() + 25 * 60 * 1000;
+  const strict = (over = {}) => focus({ mode: "strict", strictUntil: until, rules: { hiddenElements: { "news.example": ["#promo"] } }, ...over });
+  const state = { current: strict() };
+  const h = await startShield({ app: fakeApp(() => state.current) });
+  t.after(() => h.dispose());
+  await h.send({ type: "picker.picked", host: "news.example", selector: "#promo" });
+  const reply = await h.send({ type: "elements.remove", host: "news.example", selector: "#promo" });
+  assert.equal(reply.ok, false);
+  assert.equal(reply.lockedUntil, until);
+  assert.match(reply.message, /Strict focus until .*: you can block more/);
+  assert.equal(h.sent("rule.removeElement").length, 0, "the app is not asked");
+  const info = await h.send({ type: "page.query", url: "https://news.example/" });
+  assert.ok(info.selectors.includes("#promo"), "still hidden");
+  assert.equal((await h.send({ type: "popup.get", url: "https://news.example/" })).rulesLockedUntil, until);
+  assert.equal((await h.send({ type: "picker.picked", host: "news.example", selector: "#more" })).ok, true, "hiding more is fine");
+});
+
 test("an element picked while the app is away reaches it after it reconnects", async (t) => {
   const state = { current: focus() };
   const h = await startShield({ app: fakeApp(() => state.current) });
