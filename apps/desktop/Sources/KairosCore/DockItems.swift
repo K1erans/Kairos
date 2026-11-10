@@ -75,4 +75,23 @@ public enum DockReorder {
     public static func index(centers: [Double], pointer: Double) -> Int? {
         centers.indices.min { abs(centers[$0] - pointer) < abs(centers[$1] - pointer) }
     }
+
+    /// The two sections an app can be dragged between: pinned to the active group, or merely
+    /// open. `index` is where it would be inserted among the pinned apps.
+    public enum Section: Equatable, Sendable { case pinned(index: Int), open }
+
+    /// Which section the pointer is in. `pinned` and `open` are the resting centres of the
+    /// icons in each (the "add apps" tile stands in for an empty pinned section). The line
+    /// between them is halfway from the last pinned icon to the first open one, or three
+    /// quarters of an icon past the last pinned one when no other app is open.
+    public static func section(pointer: Double, pinned: [Double], open: [Double], icon: Double) -> Section {
+        let boundary: Double
+        switch (pinned.max(), open.min()) {
+        case let (last?, first?): boundary = (last + first) / 2
+        case let (last?, nil): boundary = last + icon * 0.75
+        case let (nil, first?): boundary = first - icon * 0.75
+        case (nil, nil): return .open
+        }
+        return pointer < boundary ? .pinned(index: pinned.filter { $0 < pointer }.count) : .open
+    }
 }

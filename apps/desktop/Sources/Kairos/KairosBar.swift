@@ -514,15 +514,48 @@ struct DockView: View {
         }
     }
 
-    /// The icon being dragged follows the pointer, between the first and last of its peers.
+    /// Whether a dragged app is over the pinned section or the open-apps section.
+    private func section(at axis: Double) -> DockReorder.Section {
+        let g = tracker.frame.geometry, rest = g.layout(pointer: nil).items
+        func centers(_ match: (DockGeometry.Slot) -> Bool) -> [Double] { rest.filter { match($0.slot) }.map(\.center) }
+        let pinned = centers { if case .app = $0 { return true }; return $0 == .addApp }
+        let open = centers { if case .running = $0 { return true }; return false }
+        return DockReorder.section(pointer: axis, pinned: pinned, open: open, icon: g.icon)
+    }
+
+    /// The group whose icon is under a dragged app, which the app joins when dropped there.
+    private func group(at axis: Double) -> UUID? {
+        for item in tracker.frame.geometry.layout(pointer: nil).items where abs(axis - item.center) <= item.size / 2 {
+            if case let .group(id) = item.slot { return id }
+        }
+        return nil
+    }
+
+    /// The icon being dragged follows the pointer: a group among the groups, an app anywhere
+    /// from the first group to the last open app.
     private func dragged(_ item: DockGeometry.Placement, _ layout: DockGeometry.Layout) -> DockGeometry.Placement {
         guard let drag = tracker.drag, drag.slot == item.slot else { return item }
-        let centers = peers(of: item.slot, in: layout.items).map(\.center)
-        guard let lo = centers.min(), let hi = centers.max() else { return item }
+        let reach = layout.items.filter {
+            switch (item.slot, $0.slot) {
+            case (.group, .group): return true
+            case (.group, _): return false
+            case (_, .group), (_, .app), (_, .running), (_, .addApp): return true
+            default: return false
+            }
+        }.map(\.center)
+        guard let lo = reach.min(), let hi = reach.max() else { return item }
         return DockGeometry.Placement(slot: item.slot, center: min(hi, max(lo, drag.axis)), size: item.size, scale: item.scale)
     }
 
-    /// Drag an app or a group along the bar to reorder it. A click still opens it.
+    /// A pinned app dragged into the open-apps section fades: dropped there, it is unpinned.
+    private func leaving(_ slot: DockGeometry.Slot) -> Bool {
+        guard let drag = tracker.drag, drag.slot == slot, case .app = slot, group(at: drag.axis) == nil else { return false }
+        return section(at: drag.axis) == .open
+    }
+
+    /// Drag a group among the groups, or an app along the bar: within the pinned apps to
+    /// reorder, between the pinned and open sections to pin or unpin, or onto a group's icon
+    /// to add it to that group. A click still opens it.
     private func reorder(_ slot: DockGeometry.Slot, _ f: DockFrame) -> some Gesture {
         DragGesture(minimumDistance: 4, coordinateSpace: .named(Self.space))
             .onChanged { value in
@@ -532,7 +565,7 @@ struct DockView: View {
                 guard let to = DockReorder.index(centers: peers(of: slot, in: rest).map(\.center), pointer: axis) else { return }
                 switch slot {
                 case let .app(id):
-                    model.moveDockApp(id, to: to)
+                    if case .pinned = section(at: axis), group(at: axis) == nil { model.moveDockApp(id, to: to) }
                 case let .group(id):
                     let ids = model.data.groups.map(\.id), moved = ids.moving(id, to: to)
                     if moved != ids { model.data.groups = moved.compactMap { id in model.data.groups.first { $0.id == id } } }
@@ -540,7 +573,23 @@ struct DockView: View {
                     break
                 }
             }
-            .onEnded { _ in tracker.drag = nil }
+            .onEnded { value in
+                let axis = f.bar(value.location).axis
+                tracker.drag = nil
+                switch slot {
+                case let .app(id):
+                    if let target = group(at: axis) { model.addDockApp(id, to: target) }
+                    else if section(at: axis) == .open { model.removeDockApp(id) }
+                case let .running(id):
+                    if let target = group(at: axis) { model.addDockApp(id, to: target) }
+                    else if case let .pinned(index) = section(at: axis) {
+                        model.addDockApp(id)
+                        model.moveDockApp(id, to: index)
+                    }
+                default:
+                    break
+                }
+            }
     }
 
     /// Opens an app from the bar. One that is not running yet pulses until it is.
@@ -659,6 +708,7 @@ struct DockView: View {
             Image(nsImage: Apps.icon(bundleId)).resizable().interpolation(.high)
                 .frame(width: item.size, height: item.size)
                 .modifier(LaunchPulse(active: tracker.launches.ids.contains(bundleId)))
+                .opacity(leaving(item.slot) ? 0.45 : 1)
                 .contentShape(Rectangle())
                 .onTapGesture { launch(bundleId) }
                 .gesture(reorder(item.slot, f))
@@ -676,6 +726,7 @@ struct DockView: View {
                 .frame(width: item.size, height: item.size)
                 .contentShape(Rectangle())
                 .onTapGesture { launch(bundleId) }
+                .gesture(reorder(item.slot, f))
                 .contextMenu {
                     Button("Keep in \(model.activeGroup?.name ?? "Group")") { model.addDockApp(bundleId) }
                     blockButton(bundleId)

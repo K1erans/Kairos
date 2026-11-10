@@ -96,4 +96,15 @@ final class MoveTests: XCTestCase {
         XCTAssertEqual(["a", "b", "c", "d"].moving("d", to: 0), ["d", "a", "b", "c"])
         XCTAssertEqual(["a", "b"].moving("b", to: 1), ["a", "b"])
     }
+
+    func testDraggedAppChangesSectionAtTheLineBetweenThem() {
+        let pinned = [100.0, 140, 180], open = [240.0, 280]
+        XCTAssertEqual(DockReorder.section(pointer: 60, pinned: pinned, open: open, icon: 36), .pinned(index: 0))
+        XCTAssertEqual(DockReorder.section(pointer: 150, pinned: pinned, open: open, icon: 36), .pinned(index: 2))
+        XCTAssertEqual(DockReorder.section(pointer: 205, pinned: pinned, open: open, icon: 36), .pinned(index: 3))
+        XCTAssertEqual(DockReorder.section(pointer: 215, pinned: pinned, open: open, icon: 36), .open)
+        // No other app open: well past the last pinned icon counts as dragging it off.
+        XCTAssertEqual(DockReorder.section(pointer: 200, pinned: pinned, open: [], icon: 36), .pinned(index: 3))
+        XCTAssertEqual(DockReorder.section(pointer: 210, pinned: pinned, open: [], icon: 36), .open)
+    }
 }
