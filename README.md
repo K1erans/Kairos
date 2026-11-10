@@ -55,11 +55,28 @@ All optional. Paste them in Settings > API keys; they are stored in your login K
 | Key | For | Without it |
 | --- | --- | --- |
 | TypeSafe | Jev (https://docs.typesafe.ai) | Only your block and allow lists apply |
-| Anthropic | 3D scenes in Kairos Read | No scenes |
+| Anthropic | 3D scenes in Kairos Read, when Settings > 3D scenes is set to "Anthropic API key" | Scenes use your Claude subscription (below) |
 | ElevenLabs or OpenAI | Cloud voices in Kairos Read (Settings > Reading voice) | Mac voices, which are free |
 
 Sites on Settings > Privacy > "Never send off this Mac" are never sent to Jev, a cloud voice or
 Claude.
+
+## 3D scenes
+
+Kairos Read's 3D scenes are written by Claude. By default (Settings > 3D scenes > "Claude
+subscription") they go through Claude Code on the Claude subscription this Mac is logged in to,
+with no API key: Kairos runs `scene-agent.mjs`, a small Claude Agent SDK helper that
+`scripts/build-app.sh` puts inside Kairos.app with its packages (`npm ci`). It needs:
+
+- Node.js. Kairos looks in `/opt/homebrew/bin`, `/usr/local/bin`, Volta and nvm, then asks your
+  login shell, so a Node installed any usual way is found even though Kairos is opened from Finder.
+- Claude Code logged in once: run `claude` in Terminal, then `/login`.
+
+Today's setup list shows "Claude subscription ready" once Node and the helper are found; a scene
+that fails because Claude Code is not logged in says how to log in. "Anthropic API key" uses the
+key under API keys instead. Cancel in Kairos Read stops the build in Kairos too. For a development
+build run with `swift run`, run `npm ci` in `apps/desktop/scene-agent` and set
+`KAIROS_SCENE_AGENT` to that folder's `scene-agent.mjs`.
 
 ## Permissions
 
@@ -98,8 +115,10 @@ scripts/snapshot.sh /tmp/kairos     # renders every screen and Kairos Bar state 
 ```
 
 `bridge-check.py` and `snapshot.sh` run Kairos against a scratch profile (`KAIROS_HOME`), so they
-never touch your data, your browser manifests or the Dock. `bridge-check.py` works from any
-directory and checks `apps/desktop/build/Kairos.app` unless given another path.
+never touch your data, your browser manifests, the Dock, your Keychain or Notification Center.
+`bridge-check.py` runs a copy of the app made by `scripts/scratch-copy.sh` under its own bundle id,
+so the window sizes it saves never land in your Kairos settings. It works from any directory and
+checks `apps/desktop/build/Kairos.app` unless given another path.
 
 Kairos keeps its data in `~/Library/Application Support/Kairos/kairos.json`. Set `KAIROS_HOME` to
 another folder to run a separate copy with its own data and socket.

@@ -454,9 +454,10 @@ function checkedScene(reply) {
 
 // A build runs here, not in the side panel, so closing the panel does not lose it. The finished
 // scene is saved against its article; the panel finds the job in its snapshot when it reopens.
-// Kairos Desktop has no way to abandon a build, so Cancel only stops waiting for it.
+// Cancel tells Kairos Desktop to stop the build (scene.cancel names the request by its id) and
+// stops waiting for it; so does a build that fails here, such as one that timed out.
 const INTERRUPTED_MESSAGE = "The scene build was interrupted when the browser stopped Kairos Read in the background. Build it again.";
-let sceneJob = null; // {id, kind, subject, url, startedAt, status: "running"|"done"|"error", error, sceneId, instruction?}
+let sceneJob = null; // {id, kind, subject, url, startedAt, status: "running"|"done"|"error", error, sceneId, requestId, instruction?}
 let jobSeq = 0;
 
 function setJob(next) {
@@ -484,6 +485,8 @@ function updateJob(job, changes) {
 }
 
 async function runJob(job) {
+  const requestId = `read-scene-${job.id}`;
+  let asked = false;
   try {
     let url = job.url;
     let reply;
@@ -491,21 +494,26 @@ async function runJob(job) {
     if (job.kind === "generate") {
       const article = await articleForScenes();
       url = article.url;
-      if (!updateJob(job, { url })) return;
-      reply = await sceneRequest({ type: "scene.generate", title: article.title, text: article.text, subject: job.subject, url }, 600000);
+      if (!updateJob(job, { url, requestId })) return;
+      asked = true;
+      reply = await sceneRequest({ type: "scene.generate", id: requestId, title: article.title, text: article.text, subject: job.subject, url }, 600000);
       sceneId = `${Date.now().toString(36)}`;
     } else {
       const refusal = offMacRefusal(url); // the scene was made from the article at this url
       if (refusal) throw new Error(refusalMessage(refusal));
       const stored = (await scenesFor(chrome.storage.local, url)).find((s) => s.id === sceneId);
       if (!stored) throw new Error("That scene is no longer saved, so it cannot be changed.");
-      reply = await sceneRequest({ type: "scene.edit", html: stored.html, instruction: job.instruction }, 600000);
+      if (!updateJob(job, { requestId })) return;
+      asked = true;
+      reply = await sceneRequest({ type: "scene.edit", id: requestId, html: stored.html, instruction: job.instruction }, 600000);
     }
     const html = checkedScene(reply);
     if (!sceneJob || sceneJob.id !== job.id || sceneJob.status !== "running") return;
     await saveScene(chrome.storage.local, url, { id: sceneId, subject: job.subject, html });
     updateJob(job, { status: "done", sceneId });
   } catch (err) {
+    // Stopped waiting (timed out): ask the app to stop too. After its own error this is a no-op.
+    if (asked) bridge.send({ type: "scene.cancel", id: requestId });
     updateJob(job, { status: "error", error: err && err.message ? err.message : String(err) });
   }
 }
@@ -637,7 +645,10 @@ async function handle(msg) {
       return startJob({ kind: "edit", subject: String(msg.subject || "Scene"), url: String(msg.url || ""), sceneId: String(msg.id || ""), instruction });
     }
     case "scene.cancel":
-      if (jobIsRunning()) setJob(null);
+      if (jobIsRunning()) {
+        if (sceneJob.requestId) bridge.send({ type: "scene.cancel", id: sceneJob.requestId });
+        setJob(null);
+      }
       return snapshot();
     case "scene.ack":
       if (sceneJob && sceneJob.id === msg.id && sceneJob.status !== "running") setJob(null);

@@ -29,6 +29,17 @@ for ext in shield read; do
   fi
 done
 
+# The scene helper (3D scenes on the Claude subscription) with its node_modules, installed from
+# the lockfile. Kairos runs it with the Mac's own node.
+HELPER="$APP/Contents/Resources/scene-agent"
+mkdir -p "$HELPER"
+cp scene-agent/scene-agent.mjs scene-agent/package.json scene-agent/package-lock.json "$HELPER/"
+if command -v npm >/dev/null; then
+  (cd "$HELPER" && npm ci --omit=dev --no-audit --no-fund --loglevel=error)
+else
+  echo "warning: npm not found, so Kairos.app has no scene helper; scenes need an Anthropic API key" >&2
+fi
+
 # Developer ID keeps the same identity across rebuilds, so Keychain and Accessibility grants stick.
 IDENTITY="$(security find-identity -v -p codesigning | awk -F'"' '/Developer ID Application/ {print $2; exit}')"
 if [ -n "$IDENTITY" ]; then

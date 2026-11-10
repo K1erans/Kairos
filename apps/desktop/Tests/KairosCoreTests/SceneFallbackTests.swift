@@ -8,8 +8,8 @@ import XCTest
 /// the partial's text blocks are passed to the fallback model as continuation context". The
 /// `fallback` block arrives as an ordinary content_block_start; there is no special event.
 final class SceneFallbackTests: XCTestCase {
-    private func parse(_ events: [String]) throws -> SceneWriter.StreamParser {
-        var parser = SceneWriter.StreamParser()
+    private func parse(_ events: [String]) throws -> ClaudeAPI.StreamParser {
+        var parser = ClaudeAPI.StreamParser()
         for data in events {
             try parser.consume(line: "event: \((try JSONSerialization.jsonObject(with: Data(data.utf8)) as! [String: Any])["type"]!)")
             try parser.consume(line: "data: \(data)")

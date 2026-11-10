@@ -31,6 +31,7 @@ Extension IDs (fixed by the `key` in each manifest):
 | `scene.candidates` | `id`, `title`, `text`, `url` | `scene.candidates.result` |
 | `scene.generate` | `id`, `title`, `text`, `subject`, `url` | `scene.result` |
 | `scene.edit` | `id`, `html`, `instruction` | `scene.result` |
+| `scene.cancel` | `id` (of the `scene.*` request to stop) | none; that request is answered with `error {id, message}` |
 
 ## App -> extension
 
@@ -109,6 +110,11 @@ Other pushes:
   list (it reads such pages with the Mac voice), and it passes `url` so the app can refuse too:
   the app answers `error {id, message}` for a listed host.
 
+- `scene.cancel` stops a running `scene.candidates`, `scene.generate` or `scene.edit`: Kairos
+  Desktop terminates the scene helper (Claude subscription) or drops the HTTP request (API key),
+  and answers the original request with `error {id, message: "The scene build was cancelled."}`.
+  An unknown or finished `id` is ignored. A requester that wants to cancel later picks the
+  request's `id` itself.
 - Chrome rejects a message from the host that is larger than 1 MB and drops the port. Kairos
   Desktop must answer a scene that would exceed about 900 KB with `error {id, message}` instead.
 - Kairos Read re-sends `read.status` after every reconnect, so the app's play/pause control is

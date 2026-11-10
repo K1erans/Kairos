@@ -455,8 +455,10 @@ struct SetupCard: View {
             if !item.done, let folder = BridgeInstaller.extensionsFolder {
                 Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([folder]) }
             }
-        case .jevKey, .claudeKey, .voiceKey:
+        case .jevKey, .voiceKey:
             if !item.done { Button("Add key…") { model.page = .settings } }
+        case .scenes:
+            if !item.done { Button(model.data.settings.sceneBackend == .apiKey ? "Add key…" : "Settings…") { model.page = .settings } }
         case .accessibility:
             if !item.done {
                 Button("Allow…") { _ = AXIsProcessTrustedWithOptions(["AXTrustedCheckOptionPrompt": true] as CFDictionary) }
@@ -997,6 +999,15 @@ struct SettingsPage: View {
                 keyRow("TypeSafe (Jev)", has: model.hasJevKey, text: $jevKey, account: "typesafe")
                 keyRow("Anthropic (3D scenes)", has: model.hasClaudeKey, text: $claudeKey, account: "anthropic")
             }
+            Section("3D scenes (Kairos Read)") {
+                Picker("Write scenes with", selection: $model.data.settings.sceneBackend) {
+                    ForEach(SceneBackend.allCases, id: \.self) { Text($0.label).tag($0) }
+                }
+                let status = model.sceneSetup.status(model.data.settings.sceneBackend, hasClaudeKey: model.hasClaudeKey)
+                Text(status.text).font(.callout).foregroundStyle(status.ready ? Color.secondary : Color.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .onAppear { model.refreshSceneSetup() }
             Section("Reading voice (Kairos Read)") {
                 Picker("Voice", selection: Binding(get: { model.data.settings.voiceProvider },
                                                    set: { model.data.settings.setVoiceProvider($0) })) {
@@ -1133,8 +1144,8 @@ struct OnboardingSheet: View {
             step("1", "Groups", "You start with Work, Study and Personal, each with its own apps, blocked sites and timer. Switch group from Kairos Bar or the menu bar, and add one with the + on Kairos Bar.")
             step("2", "Tasks", "Press ⌥Space anywhere to add a task, like \u{201C}Draft report tomorrow 3pm\u{201D}. Pick one on Today and start a focus session.")
             step("3", "Set up", browsers.isEmpty
-                ? "Today lists what is left to set up: the Kairos Shield extension (no Chromium browser was found yet), a key for Jev, which checks whether a page or app fits your current task, a key for scenes, and window titles."
-                : "Today lists what is left to set up: loading the Kairos Shield and Kairos Read extensions, a key for Jev, which checks whether a page or app fits your current task, a key for scenes, and window titles. The browser link is installed for \(browsers.joined(separator: ", ")).")
+                ? "Today lists what is left to set up: the Kairos Shield extension (no Chromium browser was found yet), a key for Jev, which checks whether a page or app fits your current task, 3D scenes on your Claude subscription, and window titles."
+                : "Today lists what is left to set up: loading the Kairos Shield and Kairos Read extensions, a key for Jev, which checks whether a page or app fits your current task, 3D scenes on your Claude subscription, and window titles. The browser link is installed for \(browsers.joined(separator: ", ")).")
             HStack {
                 Spacer()
                 Button("Go to Today") { model.page = .today; model.data.onboarded = true }.keyboardShortcut(.defaultAction)
