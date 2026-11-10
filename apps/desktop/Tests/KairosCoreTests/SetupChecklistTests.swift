@@ -4,7 +4,7 @@ import XCTest
 final class SetupChecklistTests: XCTestCase {
     func testANewMacHasEverythingLeftToDo() {
         let list = SetupChecklist(SetupFacts())
-        XCTAssertEqual(list.items.map(\.step), [.shield, .read, .jevKey, .claudeKey, .accessibility, .openAtLogin, .dockReplacement])
+        XCTAssertEqual(list.items.map(\.step), [.shield, .read, .jevKey, .scenes, .accessibility, .openAtLogin, .dockReplacement])
         XCTAssertEqual(list.doneCount, 0)
         XCTAssertFalse(list.isComplete)
     }
@@ -31,7 +31,7 @@ final class SetupChecklistTests: XCTestCase {
     func testEverythingDoneCompletesTheList() {
         var facts = SetupFacts()
         facts.seenClients = ["shield", "read"]
-        facts.hasJevKey = true; facts.hasClaudeKey = true
+        facts.hasJevKey = true; facts.hasNode = true; facts.hasSceneHelper = true
         facts.voiceProvider = .openai; facts.hasVoiceKey = true
         facts.accessibility = true; facts.openAtLogin = true; facts.replacesDock = true
         let list = SetupChecklist(facts)

@@ -170,14 +170,17 @@ export function createBridge(opts) {
     return false;
   }
 
-  /** Sends a request with a fresh id and resolves with the reply that echoes it. */
+  /**
+   * Sends a request and resolves with the reply that echoes its id. The id is fresh unless the
+   * caller gives one (msg.id), so it can name the request later, as scene.cancel does.
+   */
   function request(msg, timeoutMs = 10000) {
     return new Promise((resolve, reject) => {
       if (!port) {
         reject(new Error("Kairos Desktop is not connected"));
         return;
       }
-      const id = `${client}-${Date.now().toString(36)}-${(++seq).toString(36)}`;
+      const id = typeof msg.id === "string" && msg.id ? msg.id : `${client}-${Date.now().toString(36)}-${(++seq).toString(36)}`;
       const timer = setTimer(() => {
         pending.delete(id);
         reject(new Error("Timed out waiting for Kairos Desktop"));

@@ -202,6 +202,16 @@ extension TempoPreset: Lenient {
 
 public enum DockEdge: String, Codable, CaseIterable, Sendable { case left, right, bottom }
 
+/// How Kairos Read's 3D scenes reach Claude.
+public enum SceneBackend: String, Codable, CaseIterable, Sendable {
+    /// The Claude Agent SDK helper, on the Claude subscription Claude Code is logged in to.
+    case subscription
+    /// The Messages API with the Anthropic key in Settings > API keys.
+    case apiKey
+
+    public var label: String { self == .subscription ? "Claude subscription" : "Anthropic API key" }
+}
+
 /// What Kairos Bar is drawn on.
 public enum BarAppearance: String, Codable, CaseIterable, Sendable {
     /// Near-black with a faint rim, measured from the macOS Dock in the dark appearance.
@@ -250,6 +260,7 @@ public struct Settings: Codable, Hashable, Sendable {
     /// Hide Kairos Bar while a full-screen app has the Space, even with auto-hide off.
     public var hidesInFullScreen: Bool = true
     public var barAppearance: BarAppearance = .dark
+    public var sceneBackend: SceneBackend = .subscription
 
     public init() {}
 
@@ -281,6 +292,7 @@ extension Settings: Lenient {
         .field("blockUnshieldedBrowsers", \.blockUnshieldedBrowsers), .field("startsFocusAfterBreak", \.startsFocusAfterBreak), .field("showsDockFolders", \.showsDockFolders),
         .field("notifiesWhenDue", \.notifiesWhenDue), .field("keepsWindowsClear", \.keepsWindowsClear),
         .field("hidesInFullScreen", \.hidesInFullScreen), .field("barAppearance", \.barAppearance),
+        .field("sceneBackend", \.sceneBackend),
     ]
 }
 

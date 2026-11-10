@@ -3,7 +3,7 @@ import Foundation
 /// The things the owner sets up once so Kairos can do everything it offers. Today lists them
 /// until they are done or the owner hides the list.
 public enum SetupStep: String, CaseIterable, Sendable {
-    case shield, read, jevKey, claudeKey, voiceKey, accessibility, openAtLogin, dockReplacement
+    case shield, read, jevKey, scenes, voiceKey, accessibility, openAtLogin, dockReplacement
 }
 
 /// What Kairos knows about the Mac and the profile when it draws the list.
@@ -12,6 +12,10 @@ public struct SetupFacts: Sendable {
     public var seenClients: Set<String> = []
     public var hasJevKey = false
     public var hasClaudeKey = false
+    public var sceneBackend: SceneBackend = .subscription
+    /// `node` was found (NodeLocator) and the scene helper is in place with its node_modules.
+    public var hasNode = false
+    public var hasSceneHelper = false
     public var voiceProvider: VoiceProvider = .system
     public var hasVoiceKey = false
     public var accessibility = false
@@ -40,8 +44,7 @@ public struct SetupChecklist: Sendable {
                  detail: "Reads articles aloud and builds 3D scenes from them. Load the read folder the same way."),
             Item(step: .jevKey, done: facts.hasJevKey, title: "Add a TypeSafe key for Jev",
                  detail: "Jev checks whether a page or app fits your current task. Without it only your block and allow lists apply."),
-            Item(step: .claudeKey, done: facts.hasClaudeKey, title: "Add an Anthropic key (optional)",
-                 detail: "For 3D scenes in Kairos Read."),
+            Self.scenes(facts),
         ]
         if facts.voiceProvider != .system {
             items.append(Item(step: .voiceKey, done: facts.hasVoiceKey, title: "Add your \(facts.voiceProvider.label) key",
@@ -56,6 +59,23 @@ public struct SetupChecklist: Sendable {
                  detail: "Kairos hides the macOS Dock while Kairos Bar is on screen and puts it back when you turn this off or quit."),
         ]
         self.items = items
+    }
+
+    /// 3D scenes in Kairos Read: the Claude subscription needs Node.js and the scene helper, an
+    /// API key needs the key. Whether Claude Code is logged in shows only when a scene is built.
+    private static func scenes(_ facts: SetupFacts) -> Item {
+        guard facts.sceneBackend == .subscription else {
+            return Item(step: .scenes, done: facts.hasClaudeKey, title: "Add an Anthropic key (optional)",
+                        detail: "For 3D scenes in Kairos Read. Or choose \u{201C}Claude subscription\u{201D} in Settings > 3D scenes to use your Claude plan instead.")
+        }
+        if facts.hasNode && facts.hasSceneHelper {
+            return Item(step: .scenes, done: true, title: "Claude subscription ready",
+                        detail: "3D scenes in Kairos Read go through Claude Code, on your Claude subscription.")
+        }
+        let detail = facts.hasNode
+            ? "This copy of Kairos has no scene helper. Rebuild it with scripts/build-app.sh, or use an Anthropic key in Settings > 3D scenes."
+            : "Kairos Read\u{2019}s 3D scenes go through Claude Code on your Claude subscription, which needs Node.js. Install it (brew install node) and log in once in Terminal with claude, then /login."
+        return Item(step: .scenes, done: false, title: "Set up 3D scenes on your Claude subscription (optional)", detail: detail)
     }
 
     public var doneCount: Int { items.filter(\.done).count }

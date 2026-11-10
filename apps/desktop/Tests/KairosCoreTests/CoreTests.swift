@@ -219,7 +219,7 @@ final class ClientTests: XCTestCase {
     }
 
     func testStreamParser() throws {
-        var p = SceneWriter.StreamParser()
+        var p = ClaudeAPI.StreamParser()
         try p.consume(line: "event: content_block_delta")
         try p.consume(line: #"data: {"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"hm"}}"#)
         try p.consume(line: #"data: {"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"<!doctype html><html>"}}"#)
@@ -227,7 +227,7 @@ final class ClientTests: XCTestCase {
         try p.consume(line: #"data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":9}}"#)
         XCTAssertEqual(try p.result(), "<!doctype html><html></html>")
 
-        var refused = SceneWriter.StreamParser()
+        var refused = ClaudeAPI.StreamParser()
         try refused.consume(line: #"data: {"type":"message_delta","delta":{"stop_reason":"refusal","stop_details":{"type":"refusal","category":"cyber"}}}"#)
         XCTAssertThrowsError(try refused.result())
     }
@@ -239,7 +239,7 @@ final class ClientTests: XCTestCase {
         let c = SceneWriter.parseCandidates(#"Sure: [{"name":"Jet engine","kind":"mechanism","why":"Shows airflow."}]"#)
         XCTAssertEqual(c, [SceneCandidate(name: "Jet engine", kind: "mechanism", why: "Shows airflow.")])
         XCTAssertEqual(SceneWriter.parseCandidates("none"), [])
-        XCTAssertTrue(JSONSerialization.isValidJSONObject(SceneWriter.requestBody(system: "s", user: "u", maxTokens: 10, effort: "low")))
+        XCTAssertTrue(JSONSerialization.isValidJSONObject(ClaudeAPI.requestBody(ClaudePrompt(system: "s", user: "u", effort: "low", maxTokens: 10))))
     }
 
     func testOpenAppsNotPinnedFollowASeparator() {

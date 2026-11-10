@@ -9,14 +9,22 @@ const DOC = (n = 1) => `<!doctype html><html><body>scene ${n}</body></html>`;
 /** A fake app whose scene.generate / scene.edit replies the test controls. */
 function sceneApp({ reply = true } = {}) {
   const held = [];
+  const cancels = [];
   let n = 0;
   const app = fakeApp({ mode: "off", rules: {} }, (msg, send) => {
+    if (msg.type === "scene.cancel") {
+      cancels.push(msg.id);
+      // Kairos Desktop stops the build and answers the original request with an error.
+      const build = held.find((b) => b.msg.id === msg.id);
+      if (build) build.fail("The scene build was cancelled.");
+      return;
+    }
     if (msg.type !== "scene.generate" && msg.type !== "scene.edit") return;
     const answer = (extra = {}) => send({ type: "scene.result", id: msg.id, html: DOC(++n), ...extra });
     if (reply) answer();
     else held.push({ msg, answer, fail: (message) => send({ type: "error", id: msg.id, message }) });
   });
-  return { app, held };
+  return { app, held, cancels };
 }
 
 async function start(opts = {}, tabUrl = URL_A) {
@@ -80,6 +88,21 @@ test("Cancel stops waiting: a late answer is not saved and the next build can st
   await tick(20);
   assert.equal((await saved(h)).length, 0);
   assert.equal((await h.send({ type: "scene.build", subject: "Engine" })).error, undefined);
+});
+
+test("Cancel asks Kairos Desktop to stop that build, by its request id", async (t) => {
+  const { h, held, cancels } = await start({ reply: false });
+  t.after(() => h.dispose());
+  await h.send({ type: "scene.build", subject: "Pendulum clock" });
+  await tick(20);
+  const asked = held[0].msg;
+  assert.equal(asked.type, "scene.generate");
+  assert.match(asked.id, /^read-scene-/);
+  await h.send({ type: "scene.cancel" });
+  await tick(20);
+  assert.deepEqual(cancels.slice(0, 1), [asked.id]);
+  assert.equal(await job(h), null, "the app's 'cancelled' answer does not bring the job back");
+  assert.equal((await saved(h)).length, 0);
 });
 
 test("a failed build leaves the reason on the job until it is acknowledged", async (t) => {

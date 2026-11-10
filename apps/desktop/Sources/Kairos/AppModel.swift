@@ -35,6 +35,8 @@ final class AppModel: ObservableObject {
     /// Shortcuts macOS would not register, as labels such as "⌥Space".
     @Published var hotkeyFailures: [String] = []
     @Published private(set) var hasClaudeKey = false
+    /// Where `node` is and whether the scene helper is in place, for the Claude subscription.
+    @Published private(set) var sceneSetup = SceneSetup()
     @Published private(set) var voiceKeys: Set<String> = []
     @Published var cloudVoices: [CloudVoice] = []
     @Published private(set) var lastVoiceError: String?
@@ -52,7 +54,8 @@ final class AppModel: ObservableObject {
     private let store: DataStore
     private let bridge = BridgeServer()
     private let jev = JevClient()
-    private let scenes = SceneWriter()
+    /// Scene requests still running, by their bridge request id, so `scene.cancel` can stop one.
+    private var sceneTasks: [String: Task<Void, Never>] = [:]
     private let voices = VoiceClient()
     private let speech = SpeechPlayer()
     private var speechGeneration = 0
@@ -203,6 +206,15 @@ final class AppModel: ObservableObject {
         hasJevKey = !(Keychain.get("typesafe") ?? "").isEmpty
         hasClaudeKey = !(Keychain.get("anthropic") ?? "").isEmpty
         voiceKeys = Set(["elevenlabs", "openai"].filter { !(Keychain.get($0) ?? "").isEmpty })
+        refreshSceneSetup()
+    }
+
+    /// Looks for `node` off the main thread: asking the login shell can take a moment.
+    func refreshSceneSetup() {
+        Task.detached(priority: .utility) {
+            let setup = SceneSetup(node: NodeLocator.locate(), helper: SceneHelper.current)
+            await MainActor.run { if self.sceneSetup != setup { self.sceneSetup = setup } }
+        }
     }
 
     /// A cloud voice is usable when a provider is chosen and its key is saved.
@@ -245,6 +257,9 @@ final class AppModel: ObservableObject {
         facts.seenClients = Set(data.seenClients).union(bridgeClients)
         facts.hasJevKey = hasJevKey
         facts.hasClaudeKey = hasClaudeKey
+        facts.sceneBackend = data.settings.sceneBackend
+        facts.hasNode = sceneSetup.node != nil
+        facts.hasSceneHelper = sceneSetup.helperInstalled
         facts.voiceProvider = data.settings.voiceProvider
         facts.hasVoiceKey = data.settings.voiceProvider.keyAccount.map { voiceKeys.contains($0) } ?? false
         facts.accessibility = accessibility
@@ -816,6 +831,8 @@ final class AppModel: ObservableObject {
             jevCheck(m, reply: reply)
         case "scene.candidates", "scene.generate", "scene.edit":
             sceneRequest(type, m, reply: reply)
+        case "scene.cancel":
+            if let id { cancelScene(id) }
         default:
             break
         }
@@ -882,27 +899,47 @@ final class AppModel: ObservableObject {
         return ["type": "scene.result", "html": html]
     }
 
+    /// The writer for the chosen backend, made per request so a changed setting or a newly
+    /// installed Node applies to the next scene. Looking for `node` may ask the login shell, so
+    /// it runs off the main thread.
+    nonisolated private static func sceneWriter(_ choice: SceneBackend, apiKey: String?, knownNode: URL?) async -> SceneWriter {
+        switch choice {
+        case .subscription: SceneWriter(backend: ClaudeSubscription(node: knownNode ?? NodeLocator.locate(), helper: SceneHelper.current))
+        case .apiKey: SceneWriter(backend: ClaudeAPI(apiKey: apiKey))
+        }
+    }
+
     private func sceneRequest(_ type: String, _ m: [String: Any], reply: @escaping ([String: Any]) -> Void) {
-        let key = Keychain.get("anthropic")
         let title = m["title"] as? String ?? "", text = m["text"] as? String ?? ""
         let subject = m["subject"] as? String ?? "", html = m["html"] as? String ?? ""
         let instruction = m["instruction"] as? String ?? ""
-        let scenes = self.scenes
-        Task {
+        let id = m["id"] as? String
+        let choice = data.settings.sceneBackend, knownNode = sceneSetup.node
+        let apiKey = choice == .apiKey ? Keychain.get("anthropic") : nil
+        let task = Task {
+            let scenes = await Self.sceneWriter(choice, apiKey: apiKey, knownNode: knownNode)
             do {
                 switch type {
                 case "scene.candidates":
-                    let list = try await scenes.candidates(apiKey: key, title: title, text: text)
+                    let list = try await scenes.candidates(title: title, text: text)
                     reply(["type": "scene.candidates.result",
                            "candidates": list.map { ["name": $0.name, "kind": $0.kind, "why": $0.why] }])
                 case "scene.generate":
-                    reply(Self.sceneReply(try await scenes.generate(apiKey: key, title: title, text: text, subject: subject)))
+                    reply(Self.sceneReply(try await scenes.generate(title: title, text: text, subject: subject)))
                 default:
-                    reply(Self.sceneReply(try await scenes.edit(apiKey: key, html: html, instruction: instruction)))
+                    reply(Self.sceneReply(try await scenes.edit(html: html, instruction: instruction)))
                 }
             } catch {
                 reply(["type": "error", "message": error.localizedDescription])
             }
+            if let id { self.sceneTasks[id] = nil }
         }
+        if let id { sceneTasks[id] = task }
+    }
+
+    /// `scene.cancel {id}`: stops that request's helper process or HTTP request. The request
+    /// itself is answered with an error saying it was cancelled.
+    private func cancelScene(_ id: String) {
+        sceneTasks.removeValue(forKey: id)?.cancel()
     }
 }

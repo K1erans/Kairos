@@ -75,7 +75,7 @@ Covered: `OverrideLedger`, `RuleLock`, `AppData.updateGroup`, `addSite`, `setApp
 
 `requestStartFocus` and `requestSkip` ask before a strict focus phase starts. Agreeing is the model's `StartFocus` or `Skip`; cancelling changes nothing, so it is no step.
 
-Last confirmed in sync: 2026-11-10, recorded as file checksums in `verification/strict-mode/synced.sha256`, in the commit "Keep rules from being loosened during strict focus" (its parent is fa762c7). Write the commit hash here each time you run `--confirm`.
+Last confirmed in sync: 2026-11-10, recorded as file checksums in `verification/strict-mode/synced.sha256`, in the commit "Write 3D scenes on the Claude subscription by default, and let Read cancel them" (its parent is c01e6bd). Write the commit hash here each time you run `--confirm`.
 
 ## What this does not cover
 
