@@ -143,4 +143,44 @@ final class SystemDockTests: XCTestCase {
         XCTAssertNil(dock.value("autohide"), "back to the macOS default, a Dock that stays on screen")
         XCTAssertNil(dock.value("autohide-delay"))
     }
+
+    func testReplaceShowsOnlyRunningAppsAndRestorePutsTheOwnersSettingBack() {
+        let dock = FakeDock()
+        dock.domain = ["static-only": ("boolean", "0")]
+        let system = SystemDock(commands: dock, memory: memory)
+        system.replace()
+        XCTAssertEqual(dock.value("static-only"), "boolean:1", "Mission Control shows only a short strip")
+        system.restore()
+        XCTAssertEqual(dock.value("static-only"), "boolean:0")
+
+        dock.domain = [:]
+        system.replace()
+        XCTAssertEqual(dock.value("static-only"), "boolean:1")
+        system.restore()
+        XCTAssertNil(dock.value("static-only"), "a setting the owner never had is deleted")
+    }
+
+    // The owner's Mac was hidden by a build that knew only the two auto-hide keys.
+    func testADockHiddenByAnOlderBuildGetsTheNewSettingAndKeepsTheOwnersValues() {
+        let dock = FakeDock()
+        dock.domain = ["autohide": ("boolean", "1"), "autohide-delay": ("float", "1000")]
+        memory.set(["autohide": ["boolean", "0"]], forKey: "systemDockSaved")
+        let system = SystemDock(commands: dock, memory: memory)
+        system.replace()
+        XCTAssertEqual(dock.value("static-only"), "boolean:1")
+        XCTAssertEqual(dock.restarts, 1)
+        system.replace()
+        XCTAssertEqual(dock.restarts, 1, "recorded once; the next launch does nothing")
+        system.restore()
+        XCTAssertEqual(dock.value("autohide"), "boolean:0")
+        XCTAssertNil(dock.value("autohide-delay"))
+        XCTAssertNil(dock.value("static-only"))
+    }
+
+    func testTheRestoreScriptPutsBackTheRunningAppsSetting() {
+        let dock = FakeDock()
+        let text = SystemDock(commands: dock, memory: memory).restoreScriptText(["static-only": ["boolean", "1"]])
+        XCTAssertTrue(text.contains("'write' 'com.apple.dock' 'static-only' '-bool' 'true'"), text)
+        XCTAssertTrue(text.contains("'delete' 'com.apple.dock' 'autohide'"), text)
+    }
 }

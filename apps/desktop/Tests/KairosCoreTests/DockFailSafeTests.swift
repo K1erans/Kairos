@@ -78,6 +78,7 @@ final class DockFailSafeTests: XCTestCase {
         XCTAssertEqual(calls, [
             ["defaults", "write", "com.apple.dock", "autohide", "-bool", "false"],
             ["defaults", "write", "com.apple.dock", "autohide-delay", "-string", "it's 0.2"],
+            ["defaults", "delete", "com.apple.dock", "static-only"],
             ["defaults", "delete", "com.kairos.test", "systemDockSaved"],
             ["killall", "Dock"],
         ])

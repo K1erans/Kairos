@@ -31,11 +31,16 @@ public struct ProcessRunner: CommandRunner {
 /// long delay, so it never slides out. `restore()` puts back exactly what was there before,
 /// including "not set", and works after a relaunch because the old values live in `memory`.
 ///
+/// It also turns on "static-only", so the Dock shows only running apps. Mission Control (F3)
+/// always shows the Dock, auto-hide or not, and this keeps it to a short strip there.
+///
 /// While the Dock is hidden a shell script that does the same as `restore()` sits at
 /// `restoreScript`, so `DockWatchdog` can bring the Dock back if Kairos stops without doing it.
 public struct SystemDock {
     public static let domain = "com.apple.dock"
-    static let keys = ["autohide", "autohide-delay"]
+    static let keys = ["autohide", "autohide-delay", "static-only"]
+    /// Keys added after the first release. Older saved values have no entry for them.
+    static let laterKeys = ["static-only"]
     static let savedKey = "systemDockSaved"
     static let hiddenDelay = "1000"
 
@@ -69,29 +74,46 @@ public struct SystemDock {
     private var saved: [String: [String]]? { memory.dictionary(forKey: Self.savedKey) as? [String: [String]] }
 
     public func replace() {
-        if let saved {
-            // Hidden by a build that wrote no script: write it now.
+        if var saved {
+            // Hidden by an older build that did not know a later key: record the owner's value
+            // for it (that build never changed it) and apply the hidden setting. Only those keys:
+            // older builds left out a key the owner had never set, so a missing original key
+            // means "not set", and reading it now would record Kairos's own value.
+            let missing = Self.laterKeys.filter { saved[$0] == nil }
+            for key in missing { saved[key] = read(key).map { [$0.type, $0.text] } ?? [] }
+            if !missing.isEmpty { memory.set(saved, forKey: Self.savedKey) }
+            // Hidden by a build that wrote no script, or recorded fewer keys: write it now.
             writeRestoreScript(saved)
+            guard !missing.isEmpty else { return }
+            for key in missing { defaults(Self.hiddenArguments(key)) }
+            restartDock()
             return
         }
         // Nothing remembered, yet a restore script is still there: the Dock is hidden from a
         // run whose memory was lost. Put it back first, so what is read below is the owner's.
         recover()
-        // key -> [type, value] as `defaults` reports them; a key the user never set is left out.
+        // key -> [type, value] as `defaults` reports them; a key the user never set is [].
         var values: [String: [String]] = [:]
-        for key in Self.keys {
-            if let value = read(key) { values[key] = [value.type, value.text] }
-        }
+        for key in Self.keys { values[key] = read(key).map { [$0.type, $0.text] } ?? [] }
         // Kairos's own hidden setting is never recorded as the owner's: restoring it would leave
         // the Mac with no Dock. With nothing better known, restore will clear both keys, which
         // is the macOS default of a Dock that stays on screen.
-        if values["autohide-delay"].flatMap({ Double($0[1]) }) == Double(Self.hiddenDelay) { values = [:] }
+        if let delay = values["autohide-delay"], delay.count == 2, Double(delay[1]) == Double(Self.hiddenDelay) {
+            values = Dictionary(uniqueKeysWithValues: Self.keys.map { ($0, [String]()) })
+        }
         memory.set(values, forKey: Self.savedKey)
         // Before the Dock goes, so there is never a hidden Dock without a way back.
         writeRestoreScript(values)
-        defaults(["write", Self.domain, "autohide", "-bool", "true"])
-        defaults(["write", Self.domain, "autohide-delay", "-float", Self.hiddenDelay])
+        for key in Self.keys { defaults(Self.hiddenArguments(key)) }
         restartDock()
+    }
+
+    /// The `defaults` call that sets `key` the way Kairos wants it while the Dock is hidden.
+    static func hiddenArguments(_ key: String) -> [String] {
+        switch key {
+        case "autohide-delay": return ["write", domain, key, "-float", hiddenDelay]
+        default: return ["write", domain, key, "-bool", "true"]   // autohide, static-only
+        }
     }
 
     public func restore() {
