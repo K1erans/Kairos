@@ -534,7 +534,10 @@ struct TaskDetail: View {
             if task.due != nil {
                 DatePicker("Due", selection: Binding(get: { task.due ?? Date() }, set: { var t = task; t.due = $0; model.update(t) }))
             }
-            TextField("Estimate (minutes)", value: bind(\.estimateMin), format: .number)
+            LabeledContent("Estimate (min)") {
+                TextField("Minutes", value: bind(\.estimateMin), format: .number)
+                    .labelsHidden().multilineTextAlignment(.trailing).frame(width: 90)
+            }
             Section("Notes") { TextEditor(text: bind(\.notes)).frame(minHeight: 70) }
             Section("Subtasks") {
                 ForEach(model.subtasks(of: task.id)) { sub in
