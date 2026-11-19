@@ -43,12 +43,13 @@ public struct DockGeometry: Equatable, Sendable {
     }
 
     /// `running` is the open apps in launch order. Those not pinned to the active group follow
-    /// the pinned ones after a separator, so an app you open always has an icon on the bar.
+    /// the pinned ones after a separator when group isolation is off.
     /// Downloads and Trash come last, after another separator, unless turned off in Settings.
     public static func slots(for data: AppData, running: [String] = []) -> [Slot] {
         let apps = data.activeGroup?.dockApps ?? []
         var seen = Set(apps)
-        let extra = running.filter { seen.insert($0).inserted }
+        let isolatesGroup = data.activeGroup != nil && data.settings.switchBehavior == .hide
+        let extra = isolatesGroup ? [] : running.filter { seen.insert($0).inserted }
         let folders: [Slot] = data.settings.showsDockFolders ? [.separator] + DockFolder.allCases.map { .folder($0) } : []
         return data.groups.map { .group($0.id) } + [.newGroup, .divider] + (apps.isEmpty ? [.addApp] : apps.map { .app($0) })
             + (extra.isEmpty ? [] : [.separator] + extra.map { .running($0) }) + folders

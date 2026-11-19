@@ -236,7 +236,7 @@ public struct Settings: Codable, Hashable, Sendable {
     public var dockEdge: DockEdge = .left
     public var dockVisible: Bool = true
     public var iconSize: Double = 36
-    public var switchBehavior: SwitchBehavior = .leave
+    public var switchBehavior: SwitchBehavior = .hide
     public var presets: [TempoPreset] = TempoPreset.defaults
     public var neverAnalyse: [String] = Settings.defaultNeverAnalyse
     /// When Jev is slow or offline: false lets the page through, true blocks it.

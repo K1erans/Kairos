@@ -20,6 +20,7 @@ enum Snapshot {
         let store = DataStore(url: dir.appendingPathComponent(".scratch/kairos.json"))
         let model = AppModel(store: store, readKeys: false)
         model.data = sample()
+        model.data.settings.switchBehavior = .leave // Exercise the unpinned running-app slots too.
         var log: [String] = []
 
         func shot<V: View>(_ name: String, size: CGSize? = nil, _ view: V) {

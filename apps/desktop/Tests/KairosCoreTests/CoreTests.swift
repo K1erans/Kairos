@@ -245,6 +245,7 @@ final class ClientTests: XCTestCase {
 
     func testOpenAppsNotPinnedFollowASeparator() {
         var data = AppData.starter()
+        data.settings.switchBehavior = .leave
         data.settings.showsDockFolders = false // the folders' own separator is tested in DockItemsTests
         data.groups[0].dockApps = ["a", "b"]
         data.focus.activeGroupId = data.groups[0].id

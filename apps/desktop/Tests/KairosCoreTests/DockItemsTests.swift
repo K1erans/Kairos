@@ -4,12 +4,27 @@ import XCTest
 final class DockFolderTests: XCTestCase {
     func testDownloadsAndTrashComeLastAfterASeparator() {
         var data = AppData.starter()
+        data.settings.switchBehavior = .leave
         data.groups[0].dockApps = ["a"]
         data.focus.activeGroupId = data.groups[0].id
         let slots = DockGeometry.slots(for: data, running: ["x"])
         XCTAssertEqual(Array(slots.suffix(6)), [.app("a"), .separator, .running("x"), .separator, .folder(.downloads), .folder(.trash)])
         data.settings.showsDockFolders = false
         XCTAssertFalse(DockGeometry.slots(for: data).contains(.folder(.trash)))
+    }
+
+    func testSwitchingGroupsShowsOnlyTheirPinnedAppsOnTheBarByDefault() {
+        var data = AppData.starter()
+        data.groups[0].dockApps = ["work", "shared"]
+        data.groups[1].dockApps = ["study", "shared"]
+        data.settings.showsDockFolders = false
+        let running = ["work", "study", "shared", "other"]
+
+        let work = DockGeometry.slots(for: data, running: running)
+        XCTAssertEqual(Array(work.dropFirst(data.groups.count + 2)), [.app("work"), .app("shared")])
+        data.focus = data.focusAfterSwitch(to: data.groups[1].id)
+        let study = DockGeometry.slots(for: data, running: running)
+        XCTAssertEqual(Array(study.dropFirst(data.groups.count + 2)), [.app("study"), .app("shared")])
     }
 
     func testEveryItemOnTheBarHasItsOwnKeyEvenWithTwoSeparators() {
