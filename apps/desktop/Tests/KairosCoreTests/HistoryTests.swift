@@ -73,7 +73,7 @@ final class HistoryTests: XCTestCase {
 
     func testFalseStartsAreNotLogged() {
         var d = AppData()
-        d.log(.finished(phase: .focus, start: t0, end: t0 + 10, interruptions: 0, completed: false))
+        d.log(.finished(phase: .focus, start: t0, end: t0 + 10, duration: 10, interruptions: 0, completed: false))
         d.log(.started(phase: .focus))
         XCTAssertTrue(d.sessions.isEmpty)
         d.openSession = Session(taskId: nil, groupId: nil, start: t0, end: t0 + 5, kind: .focus)
@@ -86,7 +86,7 @@ final class HistoryTests: XCTestCase {
         let day = 86400.0
         d.sessions = [Session(taskId: nil, groupId: nil, start: t0 - 500 * day, end: t0 - 500 * day + 600, kind: .focus),
                       Session(taskId: nil, groupId: nil, start: t0 - 10 * day, end: t0 - 10 * day + 600, kind: .focus)]
-        d.log(.finished(phase: .focus, start: t0, end: t0 + 600, interruptions: 0, completed: true), now: t0 + 600)
+        d.log(.finished(phase: .focus, start: t0, end: t0 + 600, duration: 600, interruptions: 0, completed: true), now: t0 + 600)
         XCTAssertEqual(d.sessions.count, 2, "sessions older than 400 days go")
         for i in 0..<(AppData.maxBlockEvents + 10) {
             d.logBlock(BlockEvent(groupId: nil, target: "s\(i).com", layer: "rule"), now: t0)
@@ -111,19 +111,95 @@ final class HistoryTests: XCTestCase {
         XCTAssertEqual(d.activeGroup?.hiddenElements, [:])
     }
 
-    func testReturningToAGroupRestoresWithoutHidingThoseAppsAgain() {
-        // Mail was open in Work and hidden on leaving it; back in Work it must only come back.
-        let plan = GroupSwitch.plan(visible: ["com.apple.mail", "com.spotify.client", "com.apple.Safari"],
-                                    keep: ["com.apple.Safari"], restore: ["com.apple.mail"])
-        XCTAssertEqual(plan.unhide, ["com.apple.mail"])
-        XCTAssertEqual(plan.hide, ["com.spotify.client"])
+    func testGroupSwitchRestoresOnlyAppsInTheDestinationGroup() {
+        var work = AppGroup(name: "Work")
+        work.dockApps = ["mail", "browser", "notes"]
+        let policy = GroupSwitch(to: work, behavior: .hide)
+
+        XCTAssertEqual(policy.action(for: "mail", isHidden: true, hiddenBySwitch: true), .unhide)
+        XCTAssertNil(policy.action(for: "browser", isHidden: false, hiddenBySwitch: false))
+        XCTAssertNil(policy.action(for: "notes", isHidden: true, hiddenBySwitch: false))
+        XCTAssertNil(policy.action(for: "chat", isHidden: true, hiddenBySwitch: true))
+        XCTAssertEqual(policy.action(for: "music", isHidden: false, hiddenBySwitch: false), .hide)
+        XCTAssertNil(policy.action(for: "com.apple.finder", isHidden: false, hiddenBySwitch: false))
     }
 
     func testHidingOnlyTheBlockedAppsLeavesEveryOtherAppAlone() {
-        // Study blocks Discord: switching to it hides Discord and nothing else, pinned or not.
-        let plan = GroupSwitch.plan(visible: ["com.hnc.Discord", "com.spotify.client", "com.apple.Safari"],
-                                    keep: ["com.apple.finder"], restore: [], only: ["com.hnc.Discord", "com.apple.mail"])
-        XCTAssertEqual(plan.hide, ["com.hnc.Discord"])
+        var group = AppGroup(name: "Study")
+        group.dockApps = ["chat"]
+        group.blockedApps = ["chat", "mail"]
+        let policy = GroupSwitch(to: group, behavior: .hideBlocked)
+        XCTAssertEqual(policy.action(for: "chat", isHidden: false, hiddenBySwitch: false), .hide)
+        XCTAssertNil(policy.action(for: "mail", isHidden: true, hiddenBySwitch: true))
+        XCTAssertNil(policy.action(for: "music", isHidden: false, hiddenBySwitch: false))
+        XCTAssertEqual(policy.action(for: "browser", isHidden: true, hiddenBySwitch: true), .unhide)
         XCTAssertEqual(SwitchBehavior(rawValue: "hideBlocked"), .hideBlocked)
+    }
+
+    func testPausedTimeIsExcludedFromLoggedFocusMinutes() {
+        var e = TempoEngine(preset: .init(name: "Classic", focusMin: 25, shortBreakMin: 5, longBreakMin: 15, cyclesBeforeLong: 4))
+        var d = AppData()
+        e.start(.focus, now: t0)
+        // Pause 1: after 10 min active, paused for 10 min.
+        e.pause(now: t0 + 600)
+        e.resume(now: t0 + 1200)
+        // Pause 2: after 5 more min active (15 min total), paused for 5 min.
+        e.pause(now: t0 + 1500)
+        e.resume(now: t0 + 1800)
+        // Finish the remaining 10 min (wall clock is 40 min, active is 25 min).
+        let events = e.tick(now: t0 + 2400)
+        for event in events { d.log(event, now: t0 + 2400) }
+        XCTAssertEqual(d.sessions.count, 1)
+        XCTAssertEqual(d.sessions[0].duration, 1500, accuracy: 0.001)
+        XCTAssertEqual(d.sessions[0].minutes, 25, accuracy: 0.001)
+        XCTAssertEqual(d.sessions[0].end, t0 + 2400)
+    }
+
+    func testFalseStartWithLongPauseGapIsNotLogged() {
+        var e = TempoEngine()
+        var d = AppData()
+        e.start(.focus, now: t0)
+        e.pause(now: t0 + 10)
+        e.resume(now: t0 + 120)
+        // Active time is 20s (< 30s minimum), even though wall-clock span is 130s.
+        for event in e.stop(now: t0 + 130) { d.log(event, now: t0 + 130) }
+        XCTAssertTrue(d.sessions.isEmpty)
+
+        // Same rule applies to crash recovery of an openSession.
+        d.openSession = Session(taskId: nil, groupId: nil, start: t0, end: t0 + 130, activeSeconds: 20, kind: .focus)
+        d.recoverAfterLaunch(now: t0 + 200)
+        XCTAssertTrue(d.sessions.isEmpty)
+    }
+
+    func testStrictRelaunchPreservesPausedDuration() {
+        var e = TempoEngine(preset: .init(name: "Classic", focusMin: 25, shortBreakMin: 5, longBreakMin: 15, cyclesBeforeLong: 4))
+        e.start(.focus, strict: true, now: t0)
+        e.pause(now: t0 + 600)
+        e.resume(now: t0 + 1200) // endsAt = t0 + 2100 (25m active, 10m paused)
+
+        var d = AppData()
+        d.focus.mode = .strict
+        d.focus.strictUntil = e.endsAt
+        d.openSession = e.current(now: t0 + 1500).flatMap { Session($0, taskId: nil, groupId: nil) }
+
+        guard let resumed = d.recoverAfterLaunch(now: t0 + 1600) else { return XCTFail("strict phase must resume") }
+        XCTAssertEqual(resumed.pausedDuration, 600, accuracy: 0.001)
+
+        var relaunched = TempoEngine()
+        relaunched.resumeStrict(resumed)
+        let events = relaunched.tick(now: t0 + 2100)
+        for event in events { d.log(event, now: t0 + 2100) }
+        XCTAssertEqual(d.sessions.count, 1)
+        XCTAssertEqual(d.sessions[0].minutes, 25, accuracy: 0.001)
+    }
+
+    func testLegacySessionWithoutActiveSecondsFallsBackToWallClock() throws {
+        let json = """
+        {"start":"2026-01-01T10:00:00Z","end":"2026-01-01T10:25:00Z","kind":"focus","interruptions":0,"completed":true}
+        """.data(using: .utf8)!
+        let decoded = try DataStore.decoder.decode(Session.self, from: json)
+        XCTAssertNil(decoded.activeSeconds)
+        XCTAssertEqual(decoded.duration, 1500, accuracy: 0.001)
+        XCTAssertEqual(decoded.minutes, 25, accuracy: 0.001)
     }
 }

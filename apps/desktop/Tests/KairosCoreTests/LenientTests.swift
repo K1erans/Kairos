@@ -13,7 +13,7 @@ final class LenientTests: XCTestCase {
         var task = TaskItem(title: "Write", groupId: UUID())
         task.notes = "n"; task.priority = 2; task.due = t; task.estimateMin = 30; task.status = .done
         task.parentId = UUID(); task.createdAt = t; task.completedAt = t; task.listenedSec = 9
-        let session = Session(taskId: UUID(), groupId: UUID(), start: t, end: t + 600, kind: .rest, interruptions: 2, completed: false)
+        let session = Session(taskId: UUID(), groupId: UUID(), start: t, end: t + 600, activeSeconds: 540, kind: .rest, interruptions: 2, completed: false)
         let event = BlockEvent(groupId: UUID(), target: "com.hnc.Discord", label: "Discord", layer: "app", overridden: true, time: t)
         let preset = TempoPreset(name: "P", focusMin: 40, shortBreakMin: 7, longBreakMin: 20, cyclesBeforeLong: 3, strict: true)
         var settings = Settings()

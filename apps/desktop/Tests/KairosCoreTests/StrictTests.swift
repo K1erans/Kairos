@@ -35,7 +35,7 @@ final class StrictRelaunchTests: XCTestCase {
         XCTAssertEqual(tempo.mode, .strict)
         XCTAssertEqual(tempo.remaining(now: t0 + 900), 2100)
         let events = tempo.tick(now: t0 + 3000)
-        XCTAssertEqual(events.first, .finished(phase: .focus, start: t0, end: t0 + 3000, interruptions: 0, completed: true))
+        XCTAssertEqual(events.first, .finished(phase: .focus, start: t0, end: t0 + 3000, duration: 3000, interruptions: 0, completed: true))
         XCTAssertEqual(tempo.phase, .shortBreak)
     }
 

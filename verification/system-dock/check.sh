@@ -18,10 +18,10 @@ fi
 WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
 cp "$HERE/SystemDock.tla" "$WORK/"
 PROPS="NeverSavesOwn WayBack WatchdogCovers BackWhenNotReplacing"
-run() { # label recovers refuses
+run() { # label recovers refuses keeps
   local bad=0
   for inv in $PROPS; do
-    printf 'SPECIFICATION Spec\nCONSTANTS\n  RecoversFromScript = %s\n  RefusesOwnValues = %s\nINVARIANT %s\n' "$2" "$3" "$inv" > "$WORK/$inv.cfg"
+    printf 'SPECIFICATION Spec\nCONSTANTS\n  RecoversFromScript = %s\n  RefusesOwnValues = %s\n  KeepsRecoveryOnFail = %s\nINVARIANT %s\n' "$2" "$3" "$4" "$inv" > "$WORK/$inv.cfg"
     out=$(cd "$WORK" && java -cp "$JAR" tlc2.TLC -config "$inv.cfg" SystemDock.tla 2>&1)
     if echo "$out" | grep -q "No error has been found"; then echo "  ok    $1 $inv"
     else echo "  FAIL  $1 $inv"; bad=1
@@ -30,9 +30,10 @@ run() { # label recovers refuses
   done
   return $bad
 }
-echo "The code as it is:"; run code TRUE TRUE; status=$?
+echo "The code as it is:"; run code TRUE TRUE TRUE; status=$?
 if [ "${1:-}" = "--mutants" ]; then
-  echo "Without running a leftover script first:"; run no-recover FALSE TRUE
-  echo "Without refusing Kairos's own values:"; run no-refuse FALSE FALSE
+  echo "Without running a leftover script first:"; run no-recover FALSE TRUE TRUE
+  echo "Without refusing Kairos's own values:"; run no-refuse FALSE FALSE TRUE
+  echo "Without keeping recovery data on restore failure:"; run drop-on-fail TRUE TRUE FALSE
 fi
 exit $status

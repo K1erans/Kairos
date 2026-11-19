@@ -25,7 +25,7 @@ final class BreakWaitTests: XCTestCase {
         XCTAssertEqual(e.mode, .off)
         XCTAssertTrue(e.awaitingFocus)
         XCTAssertEqual(events.last, .awaitingFocus)
-        guard case let .finished(phase, _, _, _, completed) = events.first else { return XCTFail("the break is logged") }
+        guard case let .finished(phase, _, _, _, _, completed) = events.first else { return XCTFail("the break is logged") }
         XCTAssertEqual(phase, .shortBreak)
         XCTAssertTrue(completed)
         XCTAssertTrue(e.tick(now: t0.addingTimeInterval(60 * 60), startsFocusAfterBreak: false).isEmpty, "nothing runs while waiting")

@@ -145,8 +145,12 @@ const bridge = createBridge({
         haveState = true;
         player.setCloudVoice(appState.cloudVoice);
         const session = player.session();
-        if (session && isBlocked(session.url)) player.stop(BLOCKED_MESSAGE);
-        else player.recheckPrivacy();
+        if (session && isBlocked(session.url)) {
+          cancelPendingLoad();
+          player.stop(BLOCKED_MESSAGE);
+        } else {
+          player.recheckPrivacy();
+        }
       } else if (msg.type === "read.command") {
         runCommand(msg.command);
       }
@@ -213,6 +217,32 @@ function isBlocked(url) {
 
 // ---- loading articles -------------------------------------------------------------------------
 
+// Explicit load state: idle (pendingLoad === null) or loading ({ id }).
+// Stop or any newer load bumps loadGeneration so a late extraction or fetch cannot start playback
+// or remove a queued article after the user stopped or chose something else.
+let loadGeneration = 0;
+let pendingLoad = null;
+
+function beginLoad() {
+  const id = ++loadGeneration;
+  pendingLoad = { id };
+  return id;
+}
+
+function isLoadCurrent(id) {
+  return !!pendingLoad && pendingLoad.id === id;
+}
+
+function finishLoad(id) {
+  if (isLoadCurrent(id)) pendingLoad = null;
+}
+
+function cancelPendingLoad() {
+  if (!pendingLoad) return;
+  loadGeneration++;
+  pendingLoad = null;
+}
+
 async function ensureContent(tabId) {
   try {
     const pong = await chrome.tabs.sendMessage(tabId, { type: "kr.ping" });
@@ -223,31 +253,58 @@ async function ensureContent(tabId) {
   await chrome.scripting.executeScript({ target: { tabId }, files: CONTENT_FILES });
 }
 
-async function loadFromTab(tab, { autoplay = true, onlyIfArticle = false } = {}) {
-  if (!tab || tab.id == null || !/^https?:\/\//i.test(tab.url || "")) throw new Error("Kairos Read can only read web pages.");
-  if (isBlocked(tab.url)) throw new Error(BLOCKED_MESSAGE);
-  await ensureContent(tab.id);
-  const reply = await chrome.tabs.sendMessage(tab.id, { type: "kr.extract", onlyIfArticle });
-  if (!reply || !reply.ok) {
-    if (onlyIfArticle) return false;
-    throw new Error("No article found on this page.");
+async function loadFromTab(tab, { autoplay = true, onlyIfArticle = false, loadId = beginLoad() } = {}) {
+  try {
+    if (!tab || tab.id == null || !/^https?:\/\//i.test(tab.url || "")) throw new Error("Kairos Read can only read web pages.");
+    if (isBlocked(tab.url)) throw new Error(BLOCKED_MESSAGE);
+    await ensureContent(tab.id);
+    if (!isLoadCurrent(loadId)) return false;
+    const reply = await chrome.tabs.sendMessage(tab.id, { type: "kr.extract", onlyIfArticle });
+    if (!isLoadCurrent(loadId)) return false;
+    if (!reply || !reply.ok) {
+      if (onlyIfArticle) {
+        finishLoad(loadId);
+        return false;
+      }
+      throw new Error("No article found on this page.");
+    }
+    const items = buildPlaylist(reply.article.paragraphs);
+    if (items.length === 0) throw new Error("No article found on this page.");
+    const { positions = {} } = await chrome.storage.local.get("positions");
+    if (!isLoadCurrent(loadId)) return false;
+    if (isBlocked(tab.url)) throw new Error(BLOCKED_MESSAGE);
+    finishLoad(loadId);
+    player.load(
+      {
+        tabId: tab.id,
+        url: tab.url,
+        title: reply.article.title || tab.title || tab.url,
+        source: "page",
+        paragraphs: reply.article.paragraphs,
+        items,
+        index: resumeIndex(items, positions[positionKey(tab.url)]),
+      },
+      { autoplay },
+    );
+    return true;
+  } catch (err) {
+    if (!isLoadCurrent(loadId)) return false;
+    finishLoad(loadId);
+    throw err;
   }
-  const items = buildPlaylist(reply.article.paragraphs);
-  if (items.length === 0) throw new Error("No article found on this page.");
-  const { positions = {} } = await chrome.storage.local.get("positions");
-  player.load(
-    {
-      tabId: tab.id,
-      url: tab.url,
-      title: reply.article.title || tab.title || tab.url,
-      source: "page",
-      paragraphs: reply.article.paragraphs,
-      items,
-      index: resumeIndex(items, positions[positionKey(tab.url)]),
-    },
-    { autoplay },
-  );
-  return true;
+}
+
+async function loadActiveTab({ autoplay = true } = {}) {
+  const loadId = beginLoad();
+  try {
+    const tab = await activeTab();
+    if (!isLoadCurrent(loadId)) return false;
+    return await loadFromTab(tab, { autoplay, loadId });
+  } catch (err) {
+    if (!isLoadCurrent(loadId)) return false;
+    finishLoad(loadId);
+    throw err;
+  }
 }
 
 // Only one offscreen document may exist, so parses run one at a time.
@@ -327,22 +384,49 @@ async function articleFromLink(url, title = "") {
   };
 }
 
-async function loadSelection(text, tab) {
-  const paragraphs = String(text || "").split(/\n{2,}/).map((p) => p.trim()).filter(Boolean);
-  const items = buildPlaylist(paragraphs);
-  if (items.length === 0) throw new Error("Nothing selected.");
-  const url = (tab && tab.url) || "";
-  if (isBlocked(url)) throw new Error(BLOCKED_MESSAGE);
-  let tabId = null;
-  if (tab && tab.id != null) {
-    try {
-      await ensureContent(tab.id); // only needed for highlighting; reading works without it
-      tabId = tab.id;
-    } catch (_) {
-      tabId = null;
-    }
+async function loadLink(url) {
+  const loadId = beginLoad();
+  try {
+    const session = await articleFromLink(url);
+    if (!isLoadCurrent(loadId)) return false;
+    if (isBlocked(session.url)) throw new Error(BLOCKED_MESSAGE);
+    finishLoad(loadId);
+    player.load(session, { autoplay: true });
+    return true;
+  } catch (err) {
+    if (!isLoadCurrent(loadId)) return false;
+    finishLoad(loadId);
+    throw err;
   }
-  player.load({ tabId, url, title: "Selection" + (tab && tab.title ? ` from ${tab.title}` : ""), source: "selection", paragraphs, items, index: 0 }, { autoplay: true });
+}
+
+async function loadSelection(text, tab) {
+  const loadId = beginLoad();
+  try {
+    const paragraphs = String(text || "").split(/\n{2,}/).map((p) => p.trim()).filter(Boolean);
+    const items = buildPlaylist(paragraphs);
+    if (items.length === 0) throw new Error("Nothing selected.");
+    const url = (tab && tab.url) || "";
+    if (isBlocked(url)) throw new Error(BLOCKED_MESSAGE);
+    let tabId = null;
+    if (tab && tab.id != null) {
+      try {
+        await ensureContent(tab.id); // only needed for highlighting; reading works without it
+        tabId = tab.id;
+      } catch (_) {
+        tabId = null;
+      }
+    }
+    if (!isLoadCurrent(loadId)) return false;
+    if (isBlocked(url)) throw new Error(BLOCKED_MESSAGE);
+    finishLoad(loadId);
+    player.load({ tabId, url, title: "Selection" + (tab && tab.title ? ` from ${tab.title}` : ""), source: "selection", paragraphs, items, index: 0 }, { autoplay: true });
+    return true;
+  } catch (err) {
+    if (!isLoadCurrent(loadId)) return false;
+    finishLoad(loadId);
+    throw err;
+  }
 }
 
 async function activeTab() {
@@ -359,13 +443,18 @@ async function runCommand(command, arg) {
   try {
     switch (command) {
       case "toggle":
-        if (player.session()) player.toggle();
-        else await loadFromTab(await activeTab(), { autoplay: true });
+        if (player.session()) {
+          cancelPendingLoad();
+          player.toggle();
+        } else {
+          await loadActiveTab({ autoplay: true });
+        }
         break;
       case "start": // read the active tab from where it was left, even if something else is loaded
-        await loadFromTab(await activeTab(), { autoplay: true });
+        await loadActiveTab({ autoplay: true });
         break;
       case "stop":
+        cancelPendingLoad();
         player.stop();
         break;
       case "next":
@@ -410,9 +499,19 @@ function removeFromQueue(url) {
 async function queuePlay(index) {
   const entry = queue[index];
   if (!entry) return;
-  const session = await articleFromLink(entry.url, entry.title);
-  removeFromQueue(entry.url); // only once its article loaded
-  player.load(session, { autoplay: true });
+  const loadId = beginLoad();
+  try {
+    const session = await articleFromLink(entry.url, entry.title);
+    if (!isLoadCurrent(loadId)) return;
+    if (isBlocked(session.url)) throw new Error(BLOCKED_MESSAGE);
+    removeFromQueue(entry.url); // only once its article loaded and this load is still current
+    finishLoad(loadId);
+    player.load(session, { autoplay: true });
+  } catch (err) {
+    if (!isLoadCurrent(loadId)) return;
+    finishLoad(loadId);
+    throw err;
+  }
 }
 
 // ---- 3D scenes --------------------------------------------------------------------------------
@@ -421,9 +520,11 @@ async function articleForScenes() {
   const current = player.session();
   if (!current || current.source === "selection") {
     // Nothing loaded yet: load the active tab without starting to read.
-    await loadFromTab(await activeTab(), { autoplay: false });
+    const loaded = await loadActiveTab({ autoplay: false });
+    if (!loaded) throw new Error("Article loading was cancelled.");
   }
   const session = player.session();
+  if (!session) throw new Error("No article loaded.");
   const refusal = offMacRefusal(session.url);
   if (refusal) throw new Error(refusalMessage(refusal));
   return { title: session.title, url: session.url, text: session.paragraphs.join("\n\n") };
@@ -538,7 +639,7 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
   ready.then(async () => {
     try {
       if (info.menuItemId === "read-selection") await loadSelection(info.selectionText, tab);
-      else if (info.menuItemId === "read-link") player.load(await articleFromLink(info.linkUrl), { autoplay: true });
+      else if (info.menuItemId === "read-link") await loadLink(info.linkUrl);
       else if (info.menuItemId === "queue-link") await queueAdd(info.linkUrl, info.selectionText || info.linkUrl);
       else if (info.menuItemId === "read-page") await loadFromTab(tab, { autoplay: true });
       else if (info.menuItemId === "queue-page") await queueAdd(tab.url, tab.title);
@@ -574,9 +675,9 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
       chrome.storage.session.set({ session }).catch(() => {});
     }
     // "Read to me": start on its own when an article finishes loading in the tab in front.
-    if (changeInfo.status !== "complete" || !settings.readToMe || player.isPlaying() || !/^https?:\/\//i.test(tab.url || "")) return;
+    if (changeInfo.status !== "complete" || !settings.readToMe || player.isPlaying() || pendingLoad || !/^https?:\/\//i.test(tab.url || "")) return;
     if (session && positionKey(session.url) === positionKey(tab.url)) return;
-    if (isBlocked(tab.url) || !(await inFront(tab)) || player.isPlaying()) return;
+    if (isBlocked(tab.url) || !(await inFront(tab)) || player.isPlaying() || pendingLoad) return;
     try {
       await loadFromTab(tab, { autoplay: true, onlyIfArticle: true });
     } catch (_) {

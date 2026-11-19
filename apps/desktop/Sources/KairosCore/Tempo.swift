@@ -14,8 +14,9 @@ public enum TempoPhase: String, Codable, Sendable {
 }
 
 public enum TempoEvent: Equatable {
-    /// A phase ran to its end (or was skipped). Carries what is needed to log a session.
-    case finished(phase: TempoPhase, start: Date, end: Date, interruptions: Int, completed: Bool)
+    /// A phase ran to its end (or was skipped). Carries what is needed to log a session,
+    /// including active `duration` (excluding paused intervals).
+    case finished(phase: TempoPhase, start: Date, end: Date, duration: TimeInterval, interruptions: Int, completed: Bool)
     case started(phase: TempoPhase)
     /// The timer went idle: stopped by hand, or the Mac slept through the next phase.
     case stopped
@@ -28,7 +29,12 @@ public enum TempoEvent: Equatable {
 public struct StrictResume: Equatable, Sendable {
     public var startedAt: Date
     public var endsAt: Date
-    public init(startedAt: Date, endsAt: Date) { self.startedAt = startedAt; self.endsAt = endsAt }
+    public var pausedDuration: TimeInterval
+    public init(startedAt: Date, endsAt: Date, pausedDuration: TimeInterval = 0) {
+        self.startedAt = startedAt
+        self.endsAt = endsAt
+        self.pausedDuration = max(0, pausedDuration)
+    }
 }
 
 /// What Kairos asks before a strict focus phase starts, naming when it ends.
@@ -59,6 +65,8 @@ public struct TempoEngine: Equatable, Sendable {
     /// Seconds left when paused; nil while running.
     public private(set) var pausedRemaining: TimeInterval?
     private var pausedAt: Date?
+    /// Total seconds spent paused across completed pause/resume cycles in the current phase.
+    private var pausedDuration: TimeInterval = 0
     /// Full length of the current phase, including any "+5 min".
     public private(set) var total: TimeInterval = 0
     public private(set) var focusCount = 0
@@ -134,7 +142,8 @@ public struct TempoEngine: Equatable, Sendable {
         phase = .focus
         startedAt = saved.startedAt
         endsAt = saved.endsAt
-        total = max(0, saved.endsAt.timeIntervalSince(saved.startedAt))
+        pausedDuration = max(0, saved.pausedDuration)
+        total = max(0, saved.endsAt.timeIntervalSince(saved.startedAt) - pausedDuration)
         pausedRemaining = nil
         pausedAt = nil
         interruptions = 0
@@ -163,6 +172,7 @@ public struct TempoEngine: Equatable, Sendable {
 
     public mutating func resume(now: Date) {
         guard let left = pausedRemaining else { return }
+        if let pausedAt { pausedDuration += max(0, now.timeIntervalSince(pausedAt)) }
         pausedRemaining = nil
         pausedAt = nil
         endsAt = now.addingTimeInterval(left)
@@ -240,15 +250,16 @@ public struct TempoEngine: Equatable, Sendable {
     private mutating func reset() {
         takePendingPreset()
         phase = .idle; startedAt = nil; endsAt = nil; pausedRemaining = nil; pausedAt = nil
-        interruptions = 0; total = 0; focusCount = 0; holdsStrict = false
+        pausedDuration = 0; interruptions = 0; total = 0; focusCount = 0; holdsStrict = false
         awaitingFocus = false
     }
 
     private func closeCurrent(now: Date, completed: Bool) -> [TempoEvent] {
         guard phase != .idle, let startedAt else { return [] }
-        // A paused phase stopped counting when it was paused.
-        let end = pausedAt ?? now
-        return [.finished(phase: phase, start: startedAt, end: max(startedAt, end), interruptions: interruptions, completed: completed)]
+        // A paused phase stopped counting when it was paused; prior pause gaps are excluded.
+        let end = max(startedAt, pausedAt ?? now)
+        let active = max(0, end.timeIntervalSince(startedAt) - pausedDuration)
+        return [.finished(phase: phase, start: startedAt, end: end, duration: active, interruptions: interruptions, completed: completed)]
     }
 
     private mutating func begin(_ p: TempoPhase, now: Date) {
@@ -258,6 +269,7 @@ public struct TempoEngine: Equatable, Sendable {
         endsAt = now.addingTimeInterval(total)
         pausedRemaining = nil
         pausedAt = nil
+        pausedDuration = 0
         interruptions = 0
     }
 }

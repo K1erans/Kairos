@@ -8,12 +8,16 @@ final class FakeDock: CommandRunner {
     var log: [[String]] = []
     /// Stands in for the restore script, which the fake never executes.
     var onScript: (() -> Void)?
+    var scriptStatus: Int32 = 0
     var scriptRuns = 0
+    /// Optional hook to inject failures for specific defaults/killall invocations.
+    var failTool: ((String, [String]) -> Int32?)?
 
     func run(_ tool: String, _ arguments: [String]) -> (status: Int32, output: String) {
         log.append([tool] + arguments)
+        if let status = failTool?(tool, arguments) { return (status, "") }
         if tool.hasSuffix("/killall") { restarts += 1; return (0, "") }
-        if tool == "/bin/sh" { scriptRuns += 1; onScript?(); return (0, "") }
+        if tool == "/bin/sh" { scriptRuns += 1; onScript?(); return (scriptStatus, "") }
         XCTAssertTrue(tool.hasSuffix("/defaults"), tool)
         XCTAssertEqual(arguments[1], SystemDock.domain, "only the Dock's domain is touched")
         let key = arguments[2]
@@ -182,5 +186,82 @@ final class SystemDockTests: XCTestCase {
         let text = SystemDock(commands: dock, memory: memory).restoreScriptText(["static-only": ["boolean", "1"]])
         XCTAssertTrue(text.contains("'write' 'com.apple.dock' 'static-only' '-bool' 'true'"), text)
         XCTAssertTrue(text.contains("'delete' 'com.apple.dock' 'autohide'"), text)
+    }
+
+    func testPartialRestoreFailureKeepsRecoveryDataAndCompletesOnRetry() {
+        let script = FileManager.default.temporaryDirectory.appendingPathComponent("kairos-dock-\(UUID().uuidString).sh")
+        defer { try? FileManager.default.removeItem(at: script) }
+        let dock = FakeDock()
+        dock.domain = ["autohide": ("boolean", "0"), "autohide-delay": ("float", "0.2")]
+        let system = SystemDock(commands: dock, memory: memory, restoreScript: script)
+        system.replace()
+        XCTAssertEqual(system.state, .replaced)
+
+        // Fail restoring `autohide-delay` while allowing the other keys to succeed.
+        dock.failTool = { tool, args in
+            tool.hasSuffix("/defaults") && args.count >= 3 && args[2] == "autohide-delay" ? 1 : nil
+        }
+        system.restore()
+        XCTAssertEqual(system.state, .restoring)
+        XCTAssertTrue(system.hasRecoveryData, "recovery data stays until every key is restored")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: script.path), "restore script stays on disk")
+        XCTAssertEqual(dock.value("autohide"), "boolean:0", "keys that succeeded are already back")
+        XCTAssertEqual(dock.value("autohide-delay"), "float:1000", "the failed key is still hidden")
+
+        // Retry once defaults succeeds: only the remaining key is retried, then cleanup finishes.
+        dock.failTool = nil
+        dock.log.removeAll()
+        system.restore()
+        XCTAssertEqual(system.state, .restored)
+        XCTAssertFalse(system.hasRecoveryData)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: script.path))
+        XCTAssertEqual(dock.value("autohide-delay"), "float:0.2")
+        XCTAssertFalse(dock.log.contains { $0.contains("autohide") }, "already-restored keys are not re-applied")
+    }
+
+    func testReplacingAgainAfterPartialRestoreKeepsOriginalValuesAndRehidesAllKeys() {
+        let script = FileManager.default.temporaryDirectory.appendingPathComponent("kairos-dock-\(UUID().uuidString).sh")
+        defer { try? FileManager.default.removeItem(at: script) }
+        let dock = FakeDock()
+        dock.domain = ["autohide": ("boolean", "0"), "autohide-delay": ("float", "0.2")]
+        let system = SystemDock(commands: dock, memory: memory, restoreScript: script)
+        system.replace()
+
+        dock.failTool = { tool, args in
+            tool.hasSuffix("/defaults") && args.count >= 3 && args[2] == "autohide-delay" ? 1 : nil
+        }
+        system.restore()
+        XCTAssertEqual(system.state, .restoring)
+        XCTAssertEqual(dock.value("autohide"), "boolean:0")
+
+        // User turns Dock replacement back on before retry completed.
+        dock.failTool = nil
+        system.replace()
+        XCTAssertEqual(system.state, .replaced)
+        XCTAssertEqual(dock.value("autohide"), "boolean:1", "re-hidden")
+        XCTAssertEqual(dock.value("autohide-delay"), "float:1000")
+
+        // Restoring later still puts back the owner's original values.
+        system.restore()
+        XCTAssertEqual(system.state, .restored)
+        XCTAssertEqual(dock.value("autohide"), "boolean:0")
+        XCTAssertEqual(dock.value("autohide-delay"), "float:0.2")
+    }
+
+    func testFailedLeftoverScriptRecoveryKeepsScriptAndRefusesToOverwriteIt() {
+        let script = FileManager.default.temporaryDirectory.appendingPathComponent("kairos-dock-\(UUID().uuidString).sh")
+        defer { try? FileManager.default.removeItem(at: script) }
+        let dock = FakeDock()
+        dock.domain = ["autohide": ("boolean", "0")]
+        SystemDock(commands: dock, memory: memory, restoreScript: script).replace()
+        memory.removeObject(forKey: "systemDockSaved")
+
+        dock.scriptStatus = 1
+        let relaunched = SystemDock(commands: dock, memory: memory, restoreScript: script)
+        relaunched.replace()
+        XCTAssertEqual(dock.scriptRuns, 1)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: script.path), "failed recovery keeps the script")
+        XCTAssertTrue(relaunched.hasRecoveryData)
+        XCTAssertNil(memory.dictionary(forKey: "systemDockSaved"), "failed recovery does not snapshot hidden Dock")
     }
 }

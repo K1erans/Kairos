@@ -159,6 +159,80 @@ test("a page body over the size cap is refused before parsing", async (t) => {
   assert.match(h.lastPlayer().notice, /too large/);
 });
 
+test("stopping while a link is loading cancels it before playback starts", async (t) => {
+  let resolveFetch;
+  const fetch = () => new Promise((resolve) => { resolveFetch = resolve; });
+  const h = await startRead({ app: fakeApp(), fetch });
+  t.after(() => h.dispose());
+
+  h.chrome.contextMenus.onClicked.fire({ menuItemId: "read-link", linkUrl: "https://l.example/slow" }, { id: 9, windowId: 1, url: "https://x.example/" });
+  await tick(10);
+  await h.cmd("stop");
+  resolveFetch(html("Arrived after stop. Should stay quiet."));
+  await tick(30);
+
+  assert.equal(h.speaking, null, "cancelled load must not start speaking");
+  assert.equal(h.lastPlayer().playing, false);
+  assert.equal(h.lastPlayer().url, "");
+});
+
+test("a slower earlier link load cannot overwrite a newer link load", async (t) => {
+  let resolveSlow;
+  const fetch = (url) => {
+    if (url.endsWith("/slow")) return new Promise((resolve) => { resolveSlow = resolve; });
+    return Promise.resolve(html("Fast article. Second sentence."));
+  };
+  const h = await startRead({ app: fakeApp(), fetch });
+  t.after(() => h.dispose());
+
+  h.chrome.contextMenus.onClicked.fire({ menuItemId: "read-link", linkUrl: "https://l.example/slow" }, { id: 9, windowId: 1, url: "https://x.example/" });
+  await tick(10);
+  h.chrome.contextMenus.onClicked.fire({ menuItemId: "read-link", linkUrl: "https://l.example/fast" }, { id: 9, windowId: 1, url: "https://x.example/" });
+  await tick(30);
+  assert.equal(h.lastPlayer().url, "https://l.example/fast");
+
+  resolveSlow(html("Slow article. Late arrival."));
+  await tick(30);
+  assert.equal(h.lastPlayer().url, "https://l.example/fast", "late earlier load must not clobber newer load");
+  assert.equal(h.speaking.text, "Fast article.");
+});
+
+test("stopping while a queued item is loading keeps it in the queue and stays stopped", async (t) => {
+  let resolveFetch;
+  const fetch = () => new Promise((resolve) => { resolveFetch = resolve; });
+  const h = await startRead({ app: fakeApp(), fetch, storage: { local: { queue: [{ url: "https://q.example/1", title: "Q1" }] } } });
+  t.after(() => h.dispose());
+
+  const playReq = h.send({ type: "queue.play", index: 0 });
+  await tick(10);
+  await h.cmd("stop");
+  resolveFetch(html("Queued content. Too late."));
+  await playReq;
+  await tick(20);
+
+  assert.equal(h.speaking, null);
+  assert.deepEqual(h.local.queue.map((q) => q.title), ["Q1"], "cancelled queue load must not drop the item");
+});
+
+test("stopping while playing flushes listening time without double-logging", async (t) => {
+  const realNow = Date.now;
+  let now = 2_000_000;
+  Date.now = () => now;
+  t.after(() => { Date.now = realNow; });
+
+  const h = await playing();
+  t.after(() => h.dispose());
+  now += 25_000;
+  await h.cmd("stop");
+  assert.deepEqual(h.logs().map((l) => l.seconds), [25], "stop while playing flushes accumulated listening time");
+  assert.equal(h.statuses().at(-1), "stopped");
+
+  // Stopping again while already idle must not emit a duplicate log.
+  now += 10_000;
+  await h.cmd("stop");
+  assert.deepEqual(h.logs().map((l) => l.seconds), [25]);
+});
+
 // ---- cloud voice -----------------------------------------------------------------------------
 
 const CLOUD = "kairos:cloud";

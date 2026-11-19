@@ -131,23 +131,26 @@ public struct Session: Codable, Identifiable, Hashable, Sendable {
     public var groupId: UUID?
     public var start: Date
     public var end: Date
+    /// Active seconds spent in the phase, excluding paused intervals. Nil in sessions saved by older builds.
+    public var activeSeconds: TimeInterval?
     public var kind: SessionKind
     public var interruptions: Int = 0
     public var completed: Bool = true
 
-    public init(taskId: UUID?, groupId: UUID?, start: Date, end: Date, kind: SessionKind, interruptions: Int = 0, completed: Bool = true) {
+    public init(taskId: UUID?, groupId: UUID?, start: Date, end: Date, activeSeconds: TimeInterval? = nil, kind: SessionKind, interruptions: Int = 0, completed: Bool = true) {
         self.taskId = taskId; self.groupId = groupId; self.start = start; self.end = end
-        self.kind = kind; self.interruptions = interruptions; self.completed = completed
+        self.activeSeconds = activeSeconds; self.kind = kind; self.interruptions = interruptions; self.completed = completed
     }
-    public var minutes: Double { max(0, end.timeIntervalSince(start)) / 60 }
+    public var duration: TimeInterval { max(0, activeSeconds ?? end.timeIntervalSince(start)) }
+    public var minutes: Double { duration / 60 }
 }
 
 extension Session: Lenient {
     public static var fallback: Session { Session(taskId: nil, groupId: nil, start: .distantPast, end: .distantPast, kind: .focus) }
     public static let fields: [LenientField<Session>] = [
         .required("start", \.start), .required("end", \.end), .field("id", \.id), .field("taskId", \.taskId),
-        .field("groupId", \.groupId), .field("kind", \.kind), .field("interruptions", \.interruptions),
-        .field("completed", \.completed),
+        .field("groupId", \.groupId), .field("activeSeconds", \.activeSeconds), .field("kind", \.kind),
+        .field("interruptions", \.interruptions), .field("completed", \.completed),
     ]
 }
 

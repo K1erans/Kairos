@@ -6,7 +6,7 @@ final class TempoSleepTests: XCTestCase {
     let classic = TempoPreset(name: "C", focusMin: 25, shortBreakMin: 5, longBreakMin: 15, cyclesBeforeLong: 2)
 
     private func finished(_ events: [TempoEvent]) -> [TempoPhase] {
-        events.compactMap { if case let .finished(p, _, _, _, _) = $0 { return p } else { return nil } }
+        events.compactMap { if case let .finished(p, _, _, _, _, _) = $0 { return p } else { return nil } }
     }
 
     func testALongSleepLogsOnlyThePhaseThatRanAndThenGoesIdle() {

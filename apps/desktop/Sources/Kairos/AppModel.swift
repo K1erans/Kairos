@@ -63,12 +63,11 @@ final class AppModel: ObservableObject {
     private var saveWork: DispatchWorkItem?
     private var lastSave = Date.distantPast
     private var lastPushed = Data()
-    private var hiddenBySwitch: [UUID: [String]] = [:]
+    private var groupAppVisibility = GroupAppVisibility()
     private var observers: [NSObjectProtocol] = []
     private var reminders: AnyCancellable?
     private var grantTimer: Timer?
-    /// The app guard hides apps only in the running app, never in the snapshot tool or a
-    /// scratch copy (bridge-check), which would otherwise hide the owner's real apps.
+    /// Applies window visibility only in the live app, so snapshots and scratch copies leave the Mac alone.
     private var guardsApps = false
 
     /// `readKeys: false` skips the Keychain, so the snapshot tool never triggers an access prompt.
@@ -110,9 +109,27 @@ final class AppModel: ObservableObject {
             let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
             Task { @MainActor in if let app { self?.appActivated(app) } }
         })
+        for name in [NSWorkspace.didHideApplicationNotification, NSWorkspace.didUnhideApplicationNotification] {
+            observers.append(wc.addObserver(forName: name, object: nil, queue: .main) { [weak self] note in
+                let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+                Task { @MainActor in
+                    guard let app else { return }
+                    if name == NSWorkspace.didHideApplicationNotification {
+                        self?.groupAppVisibility.didHide(app)
+                    } else {
+                        self?.groupAppVisibility.didUnhide(app)
+                    }
+                }
+            })
+        }
         for name in [NSWorkspace.didLaunchApplicationNotification, NSWorkspace.didTerminateApplicationNotification] {
-            observers.append(wc.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
-                Task { @MainActor in self?.refreshRunning() }
+            observers.append(wc.addObserver(forName: name, object: nil, queue: .main) { [weak self] note in
+                let terminated = note.name == NSWorkspace.didTerminateApplicationNotification
+                    ? note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication : nil
+                Task { @MainActor in
+                    if let terminated { self?.groupAppVisibility.didTerminate(terminated) }
+                    self?.refreshRunning()
+                }
             })
         }
         refreshRunning()
@@ -152,6 +169,7 @@ final class AppModel: ObservableObject {
     }
 
     func shutdown() {
+        groupAppVisibility.restore()
         bridge.stop()
         saveNow()
     }
@@ -166,6 +184,16 @@ final class AppModel: ObservableObject {
 
     private func dataChanged(from old: AppData) {
         if old.focus.mode != data.focus.mode { modeChanged(from: old.focus.mode, to: data.focus.mode) }
+        if guardsApps {
+            if old.activeGroup?.id != activeGroup?.id {
+                let policy = GroupSwitch(to: activeGroup, behavior: data.settings.switchBehavior)
+                groupAppVisibility.apply(policy, to: NSWorkspace.shared.runningApplications)
+                sweepSoon()
+            } else if old.settings.switchBehavior != .leave, data.settings.switchBehavior == .leave {
+                groupAppVisibility.restore()
+                sweepSoon()
+            }
+        }
         saveWork?.cancel()
         let work = DispatchWorkItem { [weak self] in self?.saveNow() }
         saveWork = work
@@ -378,24 +406,9 @@ final class AppModel: ObservableObject {
 
     func switchGroup(_ id: UUID) {
         guard id != data.focus.activeGroupId, let next = data.group(id) else { return }
-        let previous = data.activeGroup
         data.focus = data.focusAfterSwitch(to: id)
         tempo.use(data.preset(named: next.tempoPreset))
         if next.desktop > 0 { AppDelegate.shared?.switchDesktop(next.desktop) }
-        sweepSoon()
-
-        let behavior = data.settings.switchBehavior
-        guard behavior != .leave else { return }
-        let apps = NSWorkspace.shared.runningApplications.filter { $0.activationPolicy == .regular }
-        let visible = apps.filter { !$0.isHidden }.compactMap(\.bundleIdentifier)
-        // "Hide the apps that group blocks" hides a blocked app even when it is pinned there.
-        let always = ["com.apple.finder", Bundle.main.bundleIdentifier ?? ""]
-        let plan = GroupSwitch.plan(visible: visible, keep: Set(behavior == .hide ? next.dockApps + always : always),
-                                    restore: hiddenBySwitch.removeValue(forKey: id) ?? [],
-                                    only: behavior == .hideBlocked ? Set(next.blockedApps) : nil)
-        for bid in plan.unhide { apps.first { $0.bundleIdentifier == bid }?.unhide() }
-        let hidden = plan.hide.filter { bid in apps.first { $0.bundleIdentifier == bid }?.hide() == true }
-        if let previous { hiddenBySwitch[previous.id] = hidden }
     }
 
     func switchGroup(index: Int) {
@@ -565,8 +578,8 @@ final class AppModel: ObservableObject {
     private func apply(_ events: [TempoEvent]) {
         for event in events {
             switch event {
-            case let .finished(phase, start, end, _, completed):
-                guard end.timeIntervalSince(start) >= Session.minimumLength else { continue }
+            case let .finished(phase, _, _, duration, _, completed):
+                guard duration >= Session.minimumLength else { continue }
                 data.log(event)
                 if phase == .focus, completed {
                     notify("Focus session done", body: currentTask.map { "Done with \u{201C}\($0.title)\u{201D}? Time for a break." } ?? "Time for a break.")

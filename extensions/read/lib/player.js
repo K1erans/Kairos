@@ -201,6 +201,8 @@ export function createPlayer(deps) {
   function stop(message = "") {
     stopSpeech();
     if (session) deps.clearHighlight(session);
+    // Time listened so far belongs to the session being stopped.
+    if (status === "playing") flushLog(false);
     session = null;
     notice = message;
     deps.saveSession(null);

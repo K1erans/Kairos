@@ -206,16 +206,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .sink { [weak self] hide in
                 guard let self, !DataStore.isScratch else { return }
                 if hide { self.systemDock.replace() } else { self.systemDock.restore() }
+                self.syncDockWatchdog()
             }
             .store(in: &cancellables)
-        // The watchdog brings the Dock back after a crash or force quit. It exists while the switch is on.
+        // The watchdog brings the Dock back after a crash or force quit. It stays installed while
+        // the switch is on or while a previous restore left recovery data on disk.
         model.$data.map(\.settings.replacesSystemDock).removeDuplicates()
-            .sink { [weak self] on in
+            .sink { [weak self] _ in
                 guard let self, !DataStore.isScratch else { return }
-                if on { self.dockWatchdog.install() } else { self.dockWatchdog.remove() }
+                self.syncDockWatchdog()
             }
             .store(in: &cancellables)
         if ProcessInfo.processInfo.environment["KAIROS_START_FOCUS"] == "1" { model.startFocus() } // scripts/bridge-check.py
+    }
+
+    private func syncDockWatchdog() {
+        if AppModel.shared.data.settings.replacesSystemDock || systemDock.hasRecoveryData {
+            dockWatchdog.install()
+        } else {
+            dockWatchdog.remove()
+        }
     }
 
     /// Switches Mission Control desktop by sending the system's own Control-number shortcut.

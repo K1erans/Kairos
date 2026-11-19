@@ -93,6 +93,26 @@ final class DockFailSafeTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: script.path))
     }
 
+    func testTheRestoreScriptStaysOnDiskWhenDefaultsFails() throws {
+        let failDir = dir.appendingPathComponent("fail")
+        try FileManager.default.createDirectory(at: failDir, withIntermediateDirectories: true)
+        let failDefaults = failDir.appendingPathComponent("defaults")
+        try "#!/bin/sh\necho 'permission denied' >&2\nexit 1\n".write(to: failDefaults, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: failDefaults.path)
+        let okKillall = try fakeTools().killall
+        let failingTools = SystemDock.Tools(defaults: failDefaults.path, killall: okKillall)
+
+        let dock = FakeDock()
+        dock.domain = ["autohide": ("boolean", "0")]
+        let system = SystemDock(commands: dock, memory: memory, tools: failingTools, restoreScript: script, memoryDomain: "com.kairos.test")
+        system.replace()
+        XCTAssertTrue(FileManager.default.fileExists(atPath: script.path))
+
+        let status = try shell(["/bin/sh", script.path])
+        XCTAssertNotEqual(status, 0, "restore script propagates defaults failure")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: script.path), "failed restore script stays on disk for retry")
+    }
+
     func testADockHiddenByAnOlderBuildGetsItsScriptAtTheNextLaunch() throws {
         let dock = FakeDock(), tools = try fakeTools()
         SystemDock(commands: dock, memory: memory, tools: tools).replace() // no script, as before

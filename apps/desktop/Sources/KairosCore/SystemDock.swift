@@ -37,11 +37,18 @@ public struct ProcessRunner: CommandRunner {
 /// While the Dock is hidden a shell script that does the same as `restore()` sits at
 /// `restoreScript`, so `DockWatchdog` can bring the Dock back if Kairos stops without doing it.
 public struct SystemDock {
+    public enum State: Equatable, Sendable {
+        case restored
+        case replaced
+        case restoring
+    }
+
     public static let domain = "com.apple.dock"
     static let keys = ["autohide", "autohide-delay", "static-only"]
     /// Keys added after the first release. Older saved values have no entry for them.
     static let laterKeys = ["static-only"]
     static let savedKey = "systemDockSaved"
+    static let restoredKey = "systemDockRestored"
     static let hiddenDelay = "1000"
 
     /// The command-line tools, as paths. Tests point them at fakes.
@@ -68,10 +75,22 @@ public struct SystemDock {
         self.memoryDomain = memoryDomain
     }
 
-    /// True while Kairos has the Dock hidden and holds the user's values to put back.
+    /// True while Kairos has the Dock hidden (or partially restored) and holds the user's values to put back.
     public var isReplaced: Bool { memory.dictionary(forKey: Self.savedKey) != nil }
 
+    /// Explicit Dock replacement lifecycle state.
+    public var state: State {
+        guard saved != nil else { return .restored }
+        return restoredKeys.isEmpty ? .replaced : .restoring
+    }
+
+    /// True while recovery preferences or a restore script still exist and must remain covered by the watchdog.
+    public var hasRecoveryData: Bool {
+        isReplaced || (restoreScript.map { FileManager.default.fileExists(atPath: $0.path) } ?? false)
+    }
+
     private var saved: [String: [String]]? { memory.dictionary(forKey: Self.savedKey) as? [String: [String]] }
+    private var restoredKeys: Set<String> { Set(memory.stringArray(forKey: Self.restoredKey) ?? []) }
 
     public func replace() {
         if var saved {
@@ -79,19 +98,23 @@ public struct SystemDock {
             // for it (that build never changed it) and apply the hidden setting. Only those keys:
             // older builds left out a key the owner had never set, so a missing original key
             // means "not set", and reading it now would record Kairos's own value.
+            let wasRestoring = !restoredKeys.isEmpty
             let missing = Self.laterKeys.filter { saved[$0] == nil }
             for key in missing { saved[key] = read(key).map { [$0.type, $0.text] } ?? [] }
             if !missing.isEmpty { memory.set(saved, forKey: Self.savedKey) }
-            // Hidden by a build that wrote no script, or recorded fewer keys: write it now.
+            if wasRestoring { memory.removeObject(forKey: Self.restoredKey) }
+            // Hidden by a build that wrote no script, recorded fewer keys, or was mid-restore: write it now.
             writeRestoreScript(saved)
-            guard !missing.isEmpty else { return }
-            for key in missing { defaults(Self.hiddenArguments(key)) }
+            let toHide = wasRestoring ? Self.keys : missing
+            guard !toHide.isEmpty else { return }
+            for key in toHide { _ = defaults(Self.hiddenArguments(key)) }
             restartDock()
             return
         }
         // Nothing remembered, yet a restore script is still there: the Dock is hidden from a
         // run whose memory was lost. Put it back first, so what is read below is the owner's.
-        recover()
+        // If recovery fails, keep the existing script intact instead of overwriting it.
+        guard recover() else { return }
         // key -> [type, value] as `defaults` reports them; a key the user never set is [].
         var values: [String: [String]] = [:]
         for key in Self.keys { values[key] = read(key).map { [$0.type, $0.text] } ?? [] }
@@ -102,9 +125,10 @@ public struct SystemDock {
             values = Dictionary(uniqueKeysWithValues: Self.keys.map { ($0, [String]()) })
         }
         memory.set(values, forKey: Self.savedKey)
+        memory.removeObject(forKey: Self.restoredKey)
         // Before the Dock goes, so there is never a hidden Dock without a way back.
         writeRestoreScript(values)
-        for key in Self.keys { defaults(Self.hiddenArguments(key)) }
+        for key in Self.keys { _ = defaults(Self.hiddenArguments(key)) }
         restartDock()
     }
 
@@ -117,50 +141,89 @@ public struct SystemDock {
     }
 
     public func restore() {
-        guard let saved else { recover(); return }
-        for arguments in Self.restoreArguments(saved) { defaults(arguments) }
-        memory.removeObject(forKey: Self.savedKey)
-        if let restoreScript { try? FileManager.default.removeItem(at: restoreScript) }
-        restartDock()
+        guard let saved else { _ = recover(); return }
+        var restored = restoredKeys
+        let pending = Self.keys.filter { !restored.contains($0) }
+        var changed = false
+        for key in pending {
+            if defaults(Self.restoreArguments(for: key, saved: saved)).status == 0 {
+                restored.insert(key)
+                changed = true
+            }
+        }
+        let remaining = Self.keys.filter { !restored.contains($0) }
+        if remaining.isEmpty {
+            memory.removeObject(forKey: Self.savedKey)
+            memory.removeObject(forKey: Self.restoredKey)
+            if let restoreScript { try? FileManager.default.removeItem(at: restoreScript) }
+            restartDock()
+        } else {
+            if !restored.isEmpty {
+                memory.set(Self.keys.filter { restored.contains($0) }, forKey: Self.restoredKey)
+            }
+            if changed {
+                writeRestoreScript(saved, keys: remaining)
+                restartDock()
+            }
+        }
     }
 
     /// With nothing remembered but a restore script left on disk, runs it: it holds the
     /// owner's values, puts them back, clears the memory and removes itself.
-    private func recover() {
-        guard saved == nil, let restoreScript, FileManager.default.fileExists(atPath: restoreScript.path) else { return }
-        commands.run("/bin/sh", [restoreScript.path])
+    /// Returns false when a leftover script fails to run, leaving it on disk to retry.
+    @discardableResult
+    private func recover() -> Bool {
+        guard saved == nil, let restoreScript, FileManager.default.fileExists(atPath: restoreScript.path) else { return true }
+        let result = commands.run("/bin/sh", [restoreScript.path])
+        guard result.status == 0 else { return false }
+        memory.removeObject(forKey: Self.restoredKey)
         try? FileManager.default.removeItem(at: restoreScript)
+        return true
     }
 
     /// The `defaults` calls that put back what `saved` holds, deleting what the user never set.
     static func restoreArguments(_ saved: [String: [String]]) -> [[String]] {
-        keys.map { key in
-            if let value = saved[key], value.count == 2, let flag = flag(type: value[0]) {
-                return ["write", domain, key, flag, argument(type: value[0], text: value[1])]
-            }
-            return ["delete", domain, key]
-        }
+        keys.map { restoreArguments(for: $0, saved: saved) }
     }
 
-    /// `restore()` as a shell script that removes itself when done.
-    func restoreScriptText(_ saved: [String: [String]]) -> String {
+    static func restoreArguments(for key: String, saved: [String: [String]]) -> [String] {
+        if let value = saved[key], value.count == 2, let flag = flag(type: value[0]) {
+            return ["write", domain, key, flag, argument(type: value[0], text: value[1])]
+        }
+        return ["delete", domain, key]
+    }
+
+    /// `restore()` as a shell script that removes itself only once every preference has been restored.
+    func restoreScriptText(_ saved: [String: [String]], keys: [String] = SystemDock.keys) -> String {
         var lines = [
             "#!/bin/sh",
             "# Written by Kairos while it hides the macOS Dock, and removed when Kairos puts the Dock back.",
             "# If Kairos stops without doing that, its Dock watchdog runs this.",
+            "ok=0",
         ]
-        for arguments in Self.restoreArguments(saved) + [["delete", memoryDomain, Self.savedKey]] {
-            lines.append(([tools.defaults] + arguments).map(Self.quoted).joined(separator: " ") + " 2>/dev/null")
+        for key in keys {
+            let arguments = Self.restoreArguments(for: key, saved: saved)
+            let cmd = ([tools.defaults] + arguments).map(Self.quoted).joined(separator: " ")
+            if arguments.first == "delete" {
+                lines.append("\(cmd) 2>/dev/null || { err=$(\(cmd) 2>&1); case \"$err\" in *\"Could not find key\"*|*\"not found\"*|*\"does not exist\"*) ;; *) ok=1 ;; esac; }")
+            } else {
+                lines.append("\(cmd) 2>/dev/null || ok=1")
+            }
         }
-        lines.append("/bin/rm -f \"$0\"")
+        let clearSaved = ([tools.defaults, "delete", memoryDomain, Self.savedKey]).map(Self.quoted).joined(separator: " ")
+        lines.append("if [ \"$ok\" -eq 0 ]; then")
+        lines.append("  \(clearSaved) 2>/dev/null")
+        lines.append("  /bin/rm -f \"$0\"")
+        lines.append("fi")
         lines.append("\(Self.quoted(tools.killall)) Dock")
+        lines.append("exit \"$ok\"")
         return lines.joined(separator: "\n") + "\n"
     }
 
-    private func writeRestoreScript(_ saved: [String: [String]]) {
+    private func writeRestoreScript(_ saved: [String: [String]], keys: [String] = SystemDock.keys) {
         guard let restoreScript else { return }
         try? FileManager.default.createDirectory(at: restoreScript.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try? Data(restoreScriptText(saved).utf8).write(to: restoreScript, options: .atomic)
+        try? Data(restoreScriptText(saved, keys: keys).utf8).write(to: restoreScript, options: .atomic)
         try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: restoreScript.path)
     }
 
@@ -187,10 +250,13 @@ public struct SystemDock {
         return text == "1" || text.lowercased() == "true" ? "true" : "false"
     }
 
-    private func defaults(_ arguments: [String]) { commands.run(tools.defaults, arguments) }
+    @discardableResult
+    private func defaults(_ arguments: [String]) -> (status: Int32, output: String) {
+        commands.run(tools.defaults, arguments)
+    }
 
     /// The Dock only reads its settings at launch; macOS relaunches it at once.
-    private func restartDock() { commands.run(tools.killall, ["Dock"]) }
+    private func restartDock() { _ = commands.run(tools.killall, ["Dock"]) }
 }
 
 /// A per-user LaunchAgent that brings the macOS Dock back when Kairos has stopped (a crash, a

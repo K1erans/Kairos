@@ -11,44 +11,66 @@ EXTENDS Naturals
 
 CONSTANTS
   RecoversFromScript,  \* replace()/restore() with nothing saved run a leftover script first
-  RefusesOwnValues     \* replace() never records Kairos's own hidden setting as the owner's
+  RefusesOwnValues,    \* replace() never records Kairos's own hidden setting as the owner's
+  KeepsRecoveryOnFail  \* restore()/recover()/script keep saved prefs and script when defaults fails
 
-VARIABLES running, replaces, visible, dock, saved, script, watchdog, armed
+VARIABLES running, replaces, visible, dock, saved, script, restoring, watchdog, armed
 
-vars == <<running, replaces, visible, dock, saved, script, watchdog, armed>>
+vars == <<running, replaces, visible, dock, saved, script, restoring, watchdog, armed>>
 Values == {"A", "B", "K", "D"}
 None == "none"
 
 Init ==
   /\ running = FALSE /\ replaces = FALSE /\ visible = TRUE
-  /\ dock = "A" /\ saved = None /\ script = None
+  /\ dock = "A" /\ saved = None /\ script = None /\ restoring = FALSE
   /\ watchdog = FALSE /\ armed = FALSE
 
 hides == replaces /\ visible
 
-\* What the leftover script does: put its value back and remove itself.
-\* (state after running it, as dock/script; saved is cleared by the script too)
-ScriptDock == IF script # None THEN script ELSE dock
+\* Value saved by replace() given what is currently read from com.apple.dock.
+Kept(base) == IF RefusesOwnValues /\ base = "K" THEN "D" ELSE base
 
-\* SystemDock.replace(), as the next values of <<dock, saved, script>>.
-Replaced ==
-  IF saved # None THEN <<dock, saved, saved>>               \* already hidden: rewrite the script
-  ELSE LET base == IF RecoversFromScript THEN ScriptDock ELSE dock
-           keep == IF RefusesOwnValues /\ base = "K" THEN "D" ELSE base
-       IN <<"K", keep, keep>>
+\* SystemDock.replace().
+DoReplace ==
+  IF saved # None THEN
+    \* Already hidden or mid-restore: preserve owner's saved values, rewrite full script, re-hide.
+    /\ dock' = "K" /\ saved' = saved /\ script' = saved /\ restoring' = FALSE
+  ELSE IF RecoversFromScript /\ script # None THEN
+    \/ \* recover() succeeds: restore from script, then record owner's values and hide.
+       /\ dock' = "K" /\ saved' = Kept(script) /\ script' = Kept(script) /\ restoring' = FALSE
+    \/ \* recover() fails: fixed code keeps script intact and returns early; buggy code deletes it.
+       IF KeepsRecoveryOnFail THEN
+         UNCHANGED <<dock, saved, script, restoring>>
+       ELSE
+         /\ dock' = "K" /\ saved' = Kept(dock) /\ script' = Kept(dock) /\ restoring' = FALSE
+  ELSE
+    /\ dock' = "K" /\ saved' = Kept(dock) /\ script' = Kept(dock) /\ restoring' = FALSE
 
 \* SystemDock.restore().
-Restored ==
-  IF saved # None THEN <<saved, None, None>>
-  ELSE IF RecoversFromScript /\ script # None THEN <<script, None, None>>
-  ELSE <<dock, saved, script>>
-
-Apply(next) == /\ dock' = next[1] /\ saved' = next[2] /\ script' = next[3]
+DoRestore ==
+  IF saved # None THEN
+    \/ \* All preferences restored: clear saved state and script.
+       /\ dock' = saved /\ saved' = None /\ script' = None /\ restoring' = FALSE
+    \/ \* A defaults command failed partway: keep saved state and script until retry succeeds.
+       IF KeepsRecoveryOnFail THEN
+         /\ dock' = dock /\ saved' = saved /\ script' = script /\ restoring' = TRUE
+       ELSE
+         /\ dock' = dock /\ saved' = None /\ script' = None /\ restoring' = FALSE
+  ELSE IF RecoversFromScript /\ script # None THEN
+    \/ \* recover() succeeds.
+       /\ dock' = script /\ saved' = None /\ script' = None /\ restoring' = FALSE
+    \/ \* recover() fails: keep script on disk so a later launch or watchdog can retry.
+       IF KeepsRecoveryOnFail THEN
+         /\ dock' = dock /\ saved' = None /\ script' = script /\ restoring' = TRUE
+       ELSE
+         /\ dock' = dock /\ saved' = None /\ script' = None /\ restoring' = FALSE
+  ELSE
+    UNCHANGED <<dock, saved, script, restoring>>
 
 \* The two sinks in applicationDidFinishLaunching, with the settings as they are.
 Settle(h, r) ==
-  /\ Apply(IF h THEN Replaced ELSE Restored)
-  /\ watchdog' = r
+  /\ IF h THEN DoReplace ELSE DoRestore
+  /\ watchdog' = (r \/ (KeepsRecoveryOnFail /\ (saved' # None \/ script' # None)))
 
 Launch ==
   /\ ~running /\ running' = TRUE
@@ -65,40 +87,53 @@ ToggleVisible ==
   /\ Settle(replaces /\ visible', replaces)
   /\ UNCHANGED <<running, replaces, armed>>
 
+\* Retry a restore that previously failed partway.
+RetryRestore ==
+  /\ running /\ ~hides /\ restoring
+  /\ Settle(FALSE, replaces)
+  /\ UNCHANGED <<running, replaces, visible, armed>>
+
 \* Quit, a termination signal, logging out: restore() runs.
 Quit ==
   /\ running /\ running' = FALSE
-  /\ Apply(Restored)
+  /\ DoRestore
   /\ UNCHANGED <<replaces, visible, watchdog, armed>>
 
 \* Force quit, crash, power loss: nothing runs.
 Crash ==
   /\ running /\ running' = FALSE
-  /\ UNCHANGED <<replaces, visible, dock, saved, script, watchdog, armed>>
+  /\ UNCHANGED <<replaces, visible, dock, saved, script, restoring, watchdog, armed>>
 
 \* Kairos's preferences lose the saved values: reset by hand or a cleaner, or a write that
 \* never reached the disk before a crash.
 PrefsLost ==
   /\ saved # None /\ saved' = None
-  /\ UNCHANGED <<running, replaces, visible, dock, script, watchdog, armed>>
+  /\ UNCHANGED <<running, replaces, visible, dock, script, restoring, watchdog, armed>>
 
 \* The owner changes the Dock setting in System Settings.
 OwnerSetsDock ==
   /\ dock' \in {"A", "B"} /\ dock' # dock
-  /\ UNCHANGED <<running, replaces, visible, saved, script, watchdog, armed>>
+  /\ UNCHANGED <<running, replaces, visible, saved, script, restoring, watchdog, armed>>
 
 \* The watchdog's check and its script are two steps: Kairos can start in between.
 WatchdogChecks ==
   /\ watchdog /\ ~running /\ script # None /\ ~armed
   /\ armed' = TRUE
-  /\ UNCHANGED <<running, replaces, visible, dock, saved, script, watchdog>>
+  /\ UNCHANGED <<running, replaces, visible, dock, saved, script, restoring, watchdog>>
 
 WatchdogRuns ==
   /\ armed /\ armed' = FALSE
-  /\ IF script # None THEN Apply(<<script, None, None>>) ELSE UNCHANGED <<dock, saved, script>>
+  /\ IF script # None THEN
+       \/ /\ dock' = script /\ saved' = None /\ script' = None /\ restoring' = FALSE
+       \/ IF KeepsRecoveryOnFail THEN
+            UNCHANGED <<dock, saved, script, restoring>>
+          ELSE
+            /\ dock' = dock /\ saved' = None /\ script' = None /\ restoring' = FALSE
+     ELSE
+       UNCHANGED <<dock, saved, script, restoring>>
   /\ UNCHANGED <<running, replaces, visible, watchdog>>
 
-Next == Launch \/ ToggleReplaces \/ ToggleVisible \/ Quit \/ Crash \/ PrefsLost
+Next == Launch \/ ToggleReplaces \/ ToggleVisible \/ RetryRestore \/ Quit \/ Crash \/ PrefsLost
         \/ OwnerSetsDock \/ WatchdogChecks \/ WatchdogRuns
 
 Spec == Init /\ [][Next]_vars
@@ -113,6 +148,7 @@ WayBack == dock = "K" => script \in {"A", "B", "D"}
 \* A hidden Dock with Kairos stopped always has the watchdog to bring it back.
 WatchdogCovers == (dock = "K" /\ ~running) => watchdog
 
-\* With the bar hidden or the switch off while Kairos runs, the Dock is back.
-BackWhenNotReplacing == (running /\ ~hides /\ ~armed) => dock # "K"
+\* With the bar hidden or the switch off while Kairos runs (and not awaiting retry of a failed
+\* defaults call), the Dock is back.
+BackWhenNotReplacing == (running /\ ~hides /\ ~armed /\ ~restoring) => dock # "K"
 =============================================================================

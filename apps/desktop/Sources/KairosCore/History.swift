@@ -6,10 +6,11 @@ extension Session {
 
     /// The session a finished timer phase leaves in the log, or nil for anything else.
     public init?(_ event: TempoEvent, taskId: UUID?, groupId: UUID?) {
-        guard case let .finished(phase, start, end, interruptions, completed) = event,
-              phase != .idle, end.timeIntervalSince(start) >= Self.minimumLength else { return nil }
+        guard case let .finished(phase, start, end, duration, interruptions, completed) = event,
+              phase != .idle, duration >= Self.minimumLength else { return nil }
         self.init(taskId: phase == .focus ? taskId : nil, groupId: groupId, start: start, end: end,
-                  kind: phase == .focus ? .focus : .rest, interruptions: interruptions, completed: completed)
+                  activeSeconds: duration, kind: phase == .focus ? .focus : .rest,
+                  interruptions: interruptions, completed: completed)
     }
 }
 
@@ -50,13 +51,15 @@ extension AppData {
     public mutating func recoverAfterLaunch(now: Date = Date()) -> StrictResume? {
         trimHistory(now: now)
         if let until = focus.strictUntil, until > now {
-            let start = openSession.flatMap { $0.kind == .focus ? $0.start : nil } ?? now
+            let focusOpen = openSession.flatMap { $0.kind == .focus ? $0 : nil }
+            let start = focusOpen?.start ?? now
+            let paused = focusOpen.map { max(0, $0.end.timeIntervalSince($0.start) - $0.duration) } ?? 0
             openSession = nil
             focus.mode = .strict
             focus.endsAt = until
-            return StrictResume(startedAt: min(start, now), endsAt: until)
+            return StrictResume(startedAt: min(start, now), endsAt: until, pausedDuration: paused)
         }
-        if let open = openSession, open.end.timeIntervalSince(open.start) >= Session.minimumLength {
+        if let open = openSession, open.duration >= Session.minimumLength {
             var cut = open
             cut.completed = false
             sessions.append(cut)
@@ -102,14 +105,27 @@ extension AppData {
     }
 }
 
-/// What to hide and unhide when "hide apps outside the group" switches groups.
-public enum GroupSwitch {
-    /// `visible` are the regular apps on screen now. Apps hidden when the new group was last
-    /// left come back first, and stay: they belong to that group's workspace. Then everything
-    /// else outside `keep` is hidden.
-    /// With `only` set, nothing outside it is hidden: that is "hide the apps the group blocks".
-    public static func plan(visible: [String], keep: Set<String>, restore: [String], only: Set<String>? = nil) -> (unhide: [String], hide: [String]) {
-        let back = Set(restore)
-        return (restore, visible.filter { !keep.contains($0) && !back.contains($0) && (only?.contains($0) ?? true) })
+/// Window visibility when entering a group. Only apps Kairos hid for a group switch can be restored.
+public struct GroupSwitch {
+    public enum Action { case hide, unhide }
+
+    private let behavior: SwitchBehavior
+    private let apps: Set<String>
+
+    public init(to group: AppGroup?, behavior: SwitchBehavior) {
+        self.behavior = group == nil ? .leave : behavior
+        apps = Set((behavior == .hideBlocked ? group?.blockedApps : group?.dockApps) ?? [])
+    }
+
+    public func action(for bundleId: String?, isHidden: Bool, hiddenBySwitch: Bool) -> Action? {
+        let listed = bundleId.map(apps.contains) ?? false
+        let shouldHide: Bool
+        switch behavior {
+        case .leave: shouldHide = false
+        case .hideBlocked: shouldHide = listed
+        case .hide: shouldHide = !listed
+        }
+        if shouldHide && bundleId != "com.apple.finder" { return isHidden ? nil : .hide }
+        return hiddenBySwitch ? .unhide : nil
     }
 }

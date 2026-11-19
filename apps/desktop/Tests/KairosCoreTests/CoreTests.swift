@@ -92,7 +92,7 @@ final class TempoTests: XCTestCase {
         XCTAssertEqual(e.remaining(now: t0.addingTimeInterval(60)), 24 * 60)
         var events = e.tick(now: t0.addingTimeInterval(25 * 60))
         XCTAssertEqual(e.phase, .shortBreak)
-        XCTAssertEqual(events.first, .finished(phase: .focus, start: t0, end: t0.addingTimeInterval(1500), interruptions: 0, completed: true))
+        XCTAssertEqual(events.first, .finished(phase: .focus, start: t0, end: t0.addingTimeInterval(1500), duration: 1500, interruptions: 0, completed: true))
         events = e.tick(now: t0.addingTimeInterval(30 * 60))
         XCTAssertEqual(e.phase, .focus)
         _ = e.tick(now: t0.addingTimeInterval(55 * 60))
@@ -103,8 +103,9 @@ final class TempoTests: XCTestCase {
         var e = TempoEngine()
         e.start(now: t0)
         let events = e.tick(now: t0.addingTimeInterval(3 * 3600)) // woke hours later
-        guard case let .finished(_, _, end, _, completed)? = events.first else { return XCTFail() }
+        guard case let .finished(_, _, end, duration, _, completed)? = events.first else { return XCTFail() }
         XCTAssertEqual(end, t0.addingTimeInterval(1500))
+        XCTAssertEqual(duration, 1500)
         XCTAssertTrue(completed)
     }
 
@@ -120,7 +121,7 @@ final class TempoTests: XCTestCase {
         XCTAssertEqual(e.endsAt, t0.addingTimeInterval(2200))
         XCTAssertEqual(e.interruptions, 1)
         let events = e.skip(now: t0.addingTimeInterval(1100))
-        XCTAssertEqual(events.first, .finished(phase: .focus, start: t0, end: t0.addingTimeInterval(1100), interruptions: 2, completed: false))
+        XCTAssertEqual(events.first, .finished(phase: .focus, start: t0, end: t0.addingTimeInterval(1100), duration: 700, interruptions: 2, completed: false))
         XCTAssertEqual(e.phase, .shortBreak)
     }
 }
