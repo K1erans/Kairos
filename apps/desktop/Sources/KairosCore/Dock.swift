@@ -86,26 +86,51 @@ public struct DockGeometry: Equatable, Sendable {
         return 1 + (maxScale - 1) * (cos(Double.pi * d / range) + 1) / 2
     }
 
-    /// Lays the slots out for a pointer at `pointer` along the axis, or at rest for nil. Icons
-    /// grow along the bar and push their neighbours apart, so nothing overlaps, and the bar is
-    /// shifted so the point under the pointer stays under it.
-    public func layout(pointer: Double?) -> Layout {
+    /// Lays the slots out for a pointer at `pointer` along the axis, or at rest for nil. `amount`
+    /// (0 at rest, 1 fully magnified) eases magnification in and out around the pointer.
+    ///
+    /// The bar is stretched like a lens: every point of it, icons, gaps and the spaces the
+    /// divider and separators take alike, is spread apart by the falloff around the pointer,
+    /// and the point under the pointer stays exactly under it. An icon is as long as its
+    /// stretched span. So nothing overlaps, and the bar's ends follow the pointer smoothly and
+    /// hold still while the falloff is clear of them. Growing only the icons instead makes the
+    /// bar rock once per icon, and shrink whenever the pointer crosses a slot that does not
+    /// grow, which reads as a wobble on a fast sweep.
+    public func layout(pointer: Double?, amount: Double = 1) -> Layout {
         let rest = spans(scales: Array(repeating: 1, count: slots.count))
         guard let p = pointer, !slots.isEmpty else {
             return Layout(items: place(rest, scales: Array(repeating: 1, count: slots.count), shift: 0), start: 0, end: restLength, hovered: nil)
         }
-        let scales = slots.indices.map { i in
-            slots[i].magnifies ? scale(distance: p - (rest[i].lo + rest[i].hi) / 2) : 1
+        let k = stretch * amount
+        // Where a point at `x` on the bar at rest lands; the pointer's own point stays put.
+        func at(_ x: Double) -> Double { x + k * (bulge(x - p) - range / 2) }
+        let items = slots.indices.map { i in
+            let lo = at(rest[i].lo), hi = at(rest[i].hi)
+            let size = slots[i].magnifies ? hi - lo : baseLength(slots[i])
+            return Placement(slot: slots[i], center: (lo + hi) / 2, size: size, scale: size / baseLength(slots[i]))
         }
-        let grown = spans(scales: scales)
-        let shift = p - map(p, from: rest, to: grown)
-        let items = place(grown, scales: scales, shift: shift)
         let half = gap / 2
         let hovered = items.indices.first { i in
             items[i].slot.magnifies && abs(p - items[i].center) <= items[i].size / 2 + half
         }
-        let end = (grown.last?.hi ?? 0) + padding
-        return Layout(items: items, start: shift, end: end + shift, hovered: hovered)
+        return Layout(items: items, start: at(0), end: at(restLength), hovered: hovered)
+    }
+
+    /// The falloff's shape, 1 under the pointer easing to 0 at `range`, summed from `-range`
+    /// up to `u`: how much extra length the bar gains between there and a point `u` from the
+    /// pointer, per unit of stretch.
+    private func bulge(_ u: Double) -> Double {
+        guard range > 0 else { return 0 }
+        let v = min(max(u, -range), range)
+        return (v + range + range / Double.pi * sin(Double.pi * v / range)) / 2
+    }
+
+    /// How hard the bar is stretched, set so the icon centred under the pointer comes out at
+    /// `maxScale` times its size: its span averages the falloff over the icon's length.
+    private var stretch: Double {
+        guard range > 0 else { return 0 }
+        let a = Double.pi * icon / 2 / range
+        return (maxScale - 1) / ((1 + sin(a) / a) / 2)
     }
 
     /// Tells items apart for drawing. Only separators repeat on the bar, so each is keyed by its
@@ -156,20 +181,6 @@ public struct DockGeometry: Equatable, Sendable {
         slots.indices.map { i in
             Placement(slot: slots[i], center: (spans[i].lo + spans[i].hi) / 2 + shift, size: spans[i].hi - spans[i].lo, scale: scales[i])
         }
-    }
-
-    /// Maps a position in one layout to the same relative spot in another: the same fraction
-    /// of the same slot, or the same offset into the same gap.
-    private func map(_ p: Double, from a: [Span], to b: [Span]) -> Double {
-        for i in a.indices {
-            if p < a[i].lo { return i == 0 ? p : b[i - 1].hi + (p - a[i - 1].hi) }
-            if p <= a[i].hi {
-                let length = a[i].hi - a[i].lo
-                return b[i].lo + (length > 0 ? (p - a[i].lo) / length * (b[i].hi - b[i].lo) : 0)
-            }
-        }
-        guard let lastA = a.last, let lastB = b.last else { return p }
-        return lastB.hi + (p - lastA.hi)
     }
 }
 

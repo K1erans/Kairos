@@ -93,9 +93,14 @@ enum Folders {
         if folder == .trash {
             return NSImage(named: trashFull ? NSImage.trashFullName : NSImage.trashEmptyName) ?? NSImage()
         }
+        // Kairos Bar redraws on every pointer move, so look the icon up once.
+        if let i = downloadsIcon { return i }
         guard let u = url(folder) else { return NSImage() }
-        return NSWorkspace.shared.icon(forFile: u.path)
+        let i = NSWorkspace.shared.icon(forFile: u.path)
+        downloadsIcon = i
+        return i
     }
+    private static var downloadsIcon: NSImage?
 
     /// Whether the Trash has anything in it. macOS may refuse to list it to an app without Full
     /// Disk Access; then the bar shows it empty.

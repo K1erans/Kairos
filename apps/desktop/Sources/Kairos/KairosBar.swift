@@ -149,6 +149,10 @@ final class DockTracker: ObservableObject {
     @Published var frame: DockFrame
     /// The pointer along the bar while it is on the bar, else nil.
     @Published var pointer: Double?
+    /// Where magnification is centred: the pointer, or where it left the bar while the icons
+    /// shrink back. `magnify` runs from 0 (at rest) to 1 (fully magnified).
+    @Published var focus: Double?
+    @Published var magnify: Double
     @Published var resizing = false
     /// An icon being dragged along the bar to reorder it, and where the pointer has it.
     @Published var drag: (slot: DockGeometry.Slot, axis: Double)?
@@ -167,6 +171,8 @@ final class DockTracker: ObservableObject {
     init(frame: DockFrame, pointer: Double? = nil, reveal: Double = 1) {
         self.frame = frame
         self.pointer = pointer
+        focus = pointer
+        magnify = pointer == nil ? 0 : 1
         self.reveal = reveal
     }
 }
@@ -417,12 +423,45 @@ final class DockPanelController {
             let full = Folders.trashIsFull
             if full != tracker.trashFull { tracker.trashFull = full }
         }
-        // Ease in and out of magnification; follow the pointer exactly while on the bar.
-        if (next == nil) != (tracker.pointer == nil), !tracker.frame.motion.reduced {
-            withAnimation(.easeOut(duration: 0.16)) { tracker.pointer = next }
-        } else {
-            tracker.pointer = next
+        if let next { tracker.focus = next }
+        tracker.pointer = next
+        magnify(to: next == nil ? 0 : 1)
+    }
+
+    private static let magnifyDuration = 0.16
+    private var magnifyTimer: Timer?
+    private var magnifyGoal = (from: 0.0, to: 0.0, start: Date.distantPast)
+
+    /// Eases magnification in and out on a timer, laying the bar out afresh each frame around
+    /// the pointer where it is now. Not a SwiftUI animation: that would carry the bulge from
+    /// where the pointer came in on top of every layout after it, and the bar would thrash for
+    /// a moment whenever the pointer swept on or off it quickly.
+    private func magnify(to target: Double) {
+        if tracker.frame.motion.reduced {
+            magnifyTimer?.invalidate(); magnifyTimer = nil
+            magnifyGoal = (target, target, .distantPast)
+            if tracker.magnify != target { tracker.magnify = target }
+            return
         }
+        guard target != magnifyGoal.to else { return }
+        magnifyGoal = (tracker.magnify, target, Date())
+        if magnifyTimer == nil {
+            let timer = Timer(timeInterval: 1.0 / 120, repeats: true) { [weak self] _ in
+                MainActor.assumeIsolated { self?.stepMagnify() }
+            }
+            RunLoop.main.add(timer, forMode: .common)
+            magnifyTimer = timer
+        }
+        stepMagnify()
+    }
+
+    private func stepMagnify() {
+        let goal = magnifyGoal
+        let duration = Self.magnifyDuration * abs(goal.to - goal.from)
+        let t = duration > 0 ? min(1, Date().timeIntervalSince(goal.start) / duration) : 1
+        let eased = 1 - pow(1 - t, 3)
+        tracker.magnify = goal.from + (goal.to - goal.from) * eased
+        if t >= 1 { magnifyTimer?.invalidate(); magnifyTimer = nil }
     }
 
     /// Redraws every frame while the bar slides, and otherwise wakes for the machine's next
@@ -480,7 +519,9 @@ struct DockView: View {
 
     var body: some View {
         let f = tracker.frame, g = f.geometry
-        let layout = g.layout(pointer: tracker.holding ? nil : tracker.pointer)
+        let layout = g.layout(pointer: tracker.holding ? nil : tracker.focus, amount: tracker.magnify)
+        // While the icons shrink back after the pointer leaves, none of them is hovered.
+        let hovered = tracker.pointer == nil ? nil : layout.hovered
         let grip = resizeGrip(layout, g)
         ZStack(alignment: .topLeading) {
             background(f, layout)
@@ -488,7 +529,7 @@ struct DockView: View {
                 slot(dragged(entry.item, layout), f)
                     .zIndex(tracker.drag?.slot == entry.item.slot ? 1 : 0)
             }
-            if let h = layout.hovered { label(for: layout.items[h], f) } else if let grip { label(for: grip, f) }
+            if let h = hovered { label(for: layout.items[h], f) } else if let grip { label(for: grip, f) }
         }
         .frame(width: f.size.width, height: f.size.height, alignment: .topLeading)
         .coordinateSpace(name: Self.space)

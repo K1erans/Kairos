@@ -343,6 +343,56 @@ final class DockGeometryTests: XCTestCase {
         XCTAssertEqual(l.items[4].scale, 1, "the divider never grows")
     }
 
+    func testTheBarsEndsHoldStillWhileThePointerSweepsAcrossALongRunOfApps() {
+        let d = DockGeometry(slots: [.newGroup, .divider] + (0..<14).map { .app("\($0)") }, icon: 36)
+        let rest = d.layout(pointer: nil).items
+        let from = rest[2].center + d.range + d.icon, to = rest[15].center - d.range - d.icon
+        let layouts = stride(from: from, through: to, by: 0.5).map { d.layout(pointer: $0) }
+        let starts = layouts.map(\.start), ends = layouts.map(\.end)
+        XCTAssertLessThan(starts.max()! - starts.min()!, 0.01, "the leading end rocks as the pointer crosses each icon")
+        XCTAssertLessThan(ends.max()! - ends.min()!, 0.01, "the trailing end rocks as the pointer crosses each icon")
+    }
+
+    func testTheBarsEndsHoldStillWhileThePointerCrossesTheDividerAndASeparator() {
+        let groups: [DockGeometry.Slot] = (0..<5).map { _ in .group(UUID()) }
+        let apps: [DockGeometry.Slot] = (0..<5).map { .app("\($0)") }
+        let d = DockGeometry(slots: groups + [.divider] + apps + [.separator] + apps.map { if case let .app(id) = $0 { return .running(id) }; return $0 }, icon: 26)
+        let rest = d.layout(pointer: nil).items
+        for thin in rest.filter({ !$0.slot.magnifies }) {
+            let layouts = stride(from: thin.center - d.icon, through: thin.center + d.icon, by: 0.5).map { d.layout(pointer: $0) }
+            let starts = layouts.map(\.start), ends = layouts.map(\.end)
+            XCTAssertLessThan(starts.max()! - starts.min()!, 0.01, "the bar shrinks crossing \(thin.slot)")
+            XCTAssertLessThan(ends.max()! - ends.min()!, 0.01, "the bar shrinks crossing \(thin.slot)")
+            XCTAssertTrue(layouts.allSatisfy { $0.items.first { $0.slot == thin.slot }!.size == DockGeometry.dividerLength },
+                          "\(thin.slot) keeps its size")
+        }
+    }
+
+    func testTheIconCentredUnderThePointerGrowsToTheFullMagnification() {
+        let d = dock
+        let target = d.layout(pointer: nil).items[6]
+        XCTAssertEqual(d.layout(pointer: target.center).items[6].size, d.icon * d.maxScale, accuracy: 1e-9)
+    }
+
+    func testEasingInAndOutStaysInsideThePanelAndStartsAtRest() {
+        let d = dock, o = d.overflow
+        let rest = d.layout(pointer: nil)
+        let none = d.layout(pointer: d.restLength / 2, amount: 0)
+        XCTAssertEqual(none.start, rest.start, accuracy: 1e-9)
+        XCTAssertEqual(none.end, rest.end, accuracy: 1e-9)
+        for (a, b) in zip(none.items, rest.items) { XCTAssertEqual(a.center, b.center, accuracy: 1e-9) }
+        for amount in stride(from: 0.0, through: 1, by: 0.1) {
+            for p in stride(from: -d.range, through: d.restLength + d.range, by: 1) {
+                let l = d.layout(pointer: p, amount: amount)
+                XCTAssertGreaterThanOrEqual(l.start, -o.lead - 1e-6)
+                XCTAssertLessThanOrEqual(l.end, d.restLength + o.trail + 1e-6)
+                for (a, b) in zip(l.items, l.items.dropFirst()) {
+                    XCTAssertLessThanOrEqual(a.center + a.size / 2 + d.gap, b.center - b.size / 2 + 1e-6)
+                }
+            }
+        }
+    }
+
     func testOverflowCoversEveryPointerPosition() {
         let d = dock
         let o = d.overflow
