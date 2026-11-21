@@ -10,9 +10,10 @@ function events() {
   return { addListener: (fn) => fns.push(fn), fire: (...args) => fns.map((fn) => fn(...args)), fns };
 }
 
-export async function startShield({ app = null, storage = {}, tabs = [] } = {}) {
+/** timeScale shrinks the worker's timers (Jev's wait) so a test need not sit through them. */
+export async function startShield({ app = null, storage = {}, tabs = [], timeScale = 1 } = {}) {
   const timers = new Set();
-  globalThis.setTimeout = (fn, ms, ...a) => { const t = realSetTimeout(() => { timers.delete(t); fn(...a); }, ms); timers.add(t); return t; };
+  globalThis.setTimeout = (fn, ms, ...a) => { const t = realSetTimeout(() => { timers.delete(t); fn(...a); }, (ms || 0) * timeScale); timers.add(t); return t; };
   globalThis.clearTimeout = (t) => { timers.delete(t); realClearTimeout(t); };
   const local = structuredClone(storage.local || {});
   const toApp = [];
@@ -37,6 +38,12 @@ export async function startShield({ app = null, storage = {}, tabs = [] } = {}) 
   };
   const runtimeOnMessage = events();
   const toTabs = [];
+  const tabUpdates = [];
+  const wentBack = [];
+  const removed = [];
+  const alarms = { created: {}, cleared: [] };
+  const onAlarm = events();
+  const tabsOnUpdated = events();
   const dnr = { rules: [] };
   globalThis.chrome = {
     runtime: {
@@ -63,22 +70,28 @@ export async function startShield({ app = null, storage = {}, tabs = [] } = {}) 
       getDynamicRules: async () => dnr.rules,
       updateDynamicRules: async ({ addRules }) => { dnr.rules = addRules; },
     },
-    alarms: { create: () => {}, clear: () => {}, onAlarm: events() },
+    alarms: {
+      create: (name, info) => { alarms.created[name] = info; },
+      clear: async (name) => { alarms.cleared.push(name); delete alarms.created[name]; return true; },
+      onAlarm,
+    },
     action: { setBadgeText: () => {}, setBadgeBackgroundColor: () => {}, setTitle: () => {} },
     tabs: {
       query: async () => tabs,
-      update: async () => {},
+      update: async (tabId, props) => { tabUpdates.push({ tabId, ...props }); },
       sendMessage: async (tabId, msg) => { toTabs.push({ tabId, msg }); },
-      onUpdated: events(),
-      goBack: async () => {},
-      remove: async () => {},
+      onUpdated: tabsOnUpdated,
+      goBack: async (tabId) => { wentBack.push(tabId); },
+      remove: async (tabId) => { removed.push(tabId); },
     },
   };
   await import(`../background.js?i=${++instance}`);
   await tick(10);
   const h = {
-    toApp, toTabs, local, dnr,
-    send(msg, sender = { tab: { id: 1, incognito: false } }) {
+    toApp, toTabs, tabUpdates, wentBack, removed, local, dnr, alarms,
+    fireAlarm: async (name) => { onAlarm.fire({ name }); await tick(10); },
+    tabsOnUpdated,
+    send(msg, sender = { tab: { id: 1, incognito: false }, frameId: 0 }) {
       return new Promise((resolve) => {
         const handled = runtimeOnMessage.fns.some((fn) => fn(msg, sender, resolve) === true);
         if (!handled) resolve(undefined);

@@ -16,6 +16,7 @@
   let style = null; // the hide stylesheet, held so it can be put back
   let css = "";
   let jevToken = 0;
+  let jevPage = null; // the page (URL without its hash) the last Jev check was for
   let picker = null;
 
   function ask(msg) {
@@ -33,8 +34,27 @@
 
   // ---- element rules ------------------------------------------------------------------------
 
+  // Checks one rule on its own: a selector the worker let through but this browser cannot parse
+  // must not take the rules after it down with it.
+  let probe = null;
+  try {
+    probe = new CSSStyleSheet();
+  } catch (_) {
+    probe = null;
+  }
+  function parsesAlone(rule) {
+    if (!probe) return true;
+    try {
+      probe.insertRule(rule, 0);
+      probe.deleteRule(0);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
   function applySelectors(selectors) {
-    css = (selectors || []).map((s) => `${s}{display:none!important}`).join("\n");
+    css = (selectors || []).map((s) => `${s}{display:none!important}`).filter(parsesAlone).join("\n");
     if (!css) {
       if (style) style.remove();
       return;
@@ -63,9 +83,22 @@
   const styleGuard = new MutationObserver(restore);
   new MutationObserver(restore).observe(document, { childList: true, subtree: true, attributes: true, attributeFilter: ["style", "hidden"] });
 
+  // A hash change does not make a new page: the same URL without its hash is the same page to Jev,
+  // as its cache key in the worker says.
+  function pageOf(url) {
+    const hash = String(url).indexOf("#");
+    return hash >= 0 ? String(url).slice(0, hash) : String(url);
+  }
+
   async function refresh(runJev) {
     info = await ask({ type: "page.query", url: location.href });
     if (!info) return;
+    if (info.verdict === "blocked") {
+      // Blocking happens on the network request, which a page from the back/forward cache or a
+      // load already under way when the rules changed never made: send the tab to the block page.
+      ask({ type: "page.blocked" });
+      return;
+    }
     applySelectors(info.selectors);
     if (overlay) {
       // Disconnected, mode changed, site now listed or allowed: Jev no longer decides this page.
@@ -82,26 +115,44 @@
     return text.split(/\s+/).filter(Boolean).slice(0, EXCERPT_WORDS).join(" ");
   }
 
+  // An overlay that is already up stays until the new page's verdict says otherwise, so moving
+  // within a single-page app does not uncover a page that is still a distraction.
   function scheduleJev() {
     const token = ++jevToken;
     const run = async () => {
-      if (token !== jevToken || overlay) return;
-      if (!info || (info.mode !== "focus" && info.mode !== "strict") || info.verdict !== "unlisted") return;
-      if (chrome.extension && chrome.extension.inIncognitoContext) return;
+      if (token !== jevToken) return;
+      const jevApplies =
+        info && info.jev !== false && (info.mode === "focus" || info.mode === "strict") && info.verdict === "unlisted" &&
+        !(chrome.extension && chrome.extension.inIncognitoContext);
+      if (!jevApplies) {
+        removeOverlay();
+        return;
+      }
+      const url = location.href;
+      jevPage = pageOf(url);
       const meta = document.querySelector('meta[name="description"], meta[property="og:description"]');
       const result = await ask({
         type: "jev.page",
-        url: location.href,
+        url,
         title: document.title,
         description: meta ? meta.getAttribute("content") || "" : "",
         excerpt: pageExcerpt(),
       });
-      if (token !== jevToken || !result || !result.block) return;
-      info = { ...info, ...result };
-      showOverlay();
+      if (token !== jevToken || !result) return;
+      applyJev(result);
     };
     if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", () => setTimeout(run, 300), { once: true });
     else setTimeout(run, 300);
+  }
+
+  function applyJev(result) {
+    if (result.block) {
+      info = { ...info, ...result };
+      if (overlay) overlay.update();
+      else showOverlay();
+    } else {
+      removeOverlay();
+    }
   }
 
   // ---- block overlay ------------------------------------------------------------------------
@@ -306,9 +357,17 @@
     if (!msg) return;
     if (msg.type === "page.update") refresh(!overlay);
     else if (msg.type === "page.navigated") {
-      removeOverlay();
-      refresh(true);
+      // A hash change or a history entry for the same page keeps its verdict (and its overlay).
+      refresh(pageOf(msg.url || location.href) !== jevPage);
+    } else if (msg.type === "jev.late") {
+      // Jev answered after the page was given the fallback verdict.
+      if (typeof msg.url === "string" && pageOf(msg.url) === pageOf(location.href) && pageOf(msg.url) === jevPage) applyJev(msg);
     } else if (msg.type === "picker.start") startPicker();
+  });
+
+  // Back/Forward can restore this page from the cache without a request the rules would see.
+  window.addEventListener("pageshow", (event) => {
+    if (event.persisted) refresh(pageOf(location.href) !== jevPage);
   });
 
   refresh(true);

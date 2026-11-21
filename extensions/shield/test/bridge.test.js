@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createBridge, describeConnection } from "../lib/bridge.js";
+import { RECONNECT_ALARM, createBridge, describeConnection, saysNotRunning } from "../lib/bridge.js";
 
 function fakePort() {
   const listeners = { message: [], disconnect: [] };
@@ -185,6 +185,61 @@ test("an earlier 'not running' notice does not stick to a later, different failu
   ports[1].drop();
   assert.equal(bridge.problem(), "retrying");
   bridge.stop();
+});
+
+test("the Linux host's wording is understood too, with either apostrophe", () => {
+  for (const msg of ["Kairos Desktop is not running.", "Kairos Desktop is not running", "Kairos isn't running.", "Kairos isn\u2019t running."]) {
+    assert.ok(saysNotRunning(msg), msg);
+  }
+  assert.ok(!saysNotRunning("Timed out waiting for Kairos Desktop"));
+  assert.ok(!saysNotRunning(undefined));
+  const { bridge, ports } = problemBridge({ detail: "Native host has exited." });
+  ports[0].receive({ type: "error", message: "Kairos isn't running." });
+  ports[0].drop();
+  assert.equal(bridge.problem(), "app-not-running");
+  bridge.stop();
+});
+
+function fakeAlarms() {
+  const listeners = [];
+  const a = {
+    created: {},
+    create(name, info) { a.created[name] = info; },
+    clear(name) { delete a.created[name]; return Promise.resolve(true); },
+    onAlarm: { addListener: (fn) => listeners.push(fn) },
+    fire: (name) => listeners.forEach((fn) => fn({ name })),
+  };
+  return a;
+}
+
+test("while disconnected an alarm is set to reconnect, since a sleeping worker loses its timers", () => {
+  const ports = [];
+  const alarms = fakeAlarms();
+  const bridge = createBridge({
+    client: "read",
+    version: "1",
+    alarms,
+    connect: () => { const p = fakePort(); ports.push(p); return p; },
+    setTimeout: (fn, ms) => (ms >= 1000 ? 0 : setTimeout(fn, ms)), // the backoff timer never fires: the worker slept
+  });
+  bridge.start();
+  ports[0].receive({ type: "state", state: {} });
+  assert.deepEqual(alarms.created, {}, "no alarm while connected");
+  ports[0].drop();
+  assert.ok(alarms.created[RECONNECT_ALARM], "alarm set on disconnect");
+  assert.ok(alarms.created[RECONNECT_ALARM].periodInMinutes >= 0.5, "repeats until the app is back");
+  alarms.fire("something-else");
+  assert.equal(ports.length, 1);
+  alarms.fire(RECONNECT_ALARM);
+  assert.equal(ports.length, 2, "the alarm reconnects");
+  alarms.fire(RECONNECT_ALARM);
+  assert.equal(ports.length, 2, "not while an attempt is under way");
+  ports[1].receive({ type: "state", state: {} });
+  assert.equal(bridge.isConnected(), true);
+  assert.deepEqual(alarms.created, {}, "cleared once connected");
+  ports[1].drop();
+  bridge.stop();
+  assert.deepEqual(alarms.created, {}, "cleared when stopped");
 });
 
 test("describeConnection tells the user what to do for each problem", () => {

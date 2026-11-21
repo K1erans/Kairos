@@ -2,7 +2,7 @@
 // bridge, the tabs being read, the read-later queue, context menus and shortcuts, and relays 3D
 // scene requests to Kairos Desktop.
 import { createBridge, describeConnection } from "./lib/bridge.js";
-import { EMPTY_STATE, hostnameOf, matchesAny, sanitizeState, siteVerdict } from "./lib/match.js";
+import { EMPTY_STATE, hostnameOf, matchesAny, sanitizeState, siteVerdict, strictLockUntil } from "./lib/match.js";
 import { BLOCKED_MESSAGE, createPlayer } from "./lib/player.js";
 import { buildPlaylist, clampRate, positionKey, rememberPosition, resumeIndex } from "./lib/sentences.js";
 import { looksLikeHtmlDocument, unwrapHtml } from "./lib/importmap.js";
@@ -20,7 +20,7 @@ const NO_SETTINGS_MESSAGE = "Kairos Desktop has not sent its settings yet, so Ka
 const SCENE_DROPPED_MESSAGE =
   "The connection to Kairos Desktop dropped while the scene was being sent. Chrome cannot take a message over 1 MB from an app, so a very detailed scene can do this: ask for a simpler one.";
 
-let appState = sanitizeState(EMPTY_STATE);
+let appState = sanitizeState(EMPTY_STATE); // last state the app sent, kept (and saved) while it is away
 let haveState = false; // the app has sent its settings (and so its never-analyse list) on this connection
 let connected = false;
 let problem = null; // why the app is not reachable; see describeConnection
@@ -122,8 +122,11 @@ const player = createPlayer({
   changed: () => broadcast(),
 });
 
-const ready = Promise.all([chrome.storage.local.get(["settings", "queue"]), chrome.storage.session.get(["session", "sceneJob"])])
+const ready = Promise.all([chrome.storage.local.get(["settings", "queue", "state"]), chrome.storage.session.get(["session", "sceneJob"])])
   .then(([local, sess]) => {
+    // Blocked sites stay blocked while Kairos Desktop is closed, as in Kairos Shield. A state that
+    // came in while this was loading is newer.
+    if (!haveState && local.state) appState = sanitizeState(local.state);
     if (sess.sceneJob) {
       // A build that was running died with the worker: its request is gone.
       sceneJob = sess.sceneJob.status === "running" ? { ...sess.sceneJob, status: "error", error: INTERRUPTED_MESSAGE } : sess.sceneJob;
@@ -143,6 +146,7 @@ const bridge = createBridge({
       if (msg.type === "state") {
         appState = sanitizeState(msg.state);
         haveState = true;
+        chrome.storage.local.set({ state: appState }).catch(() => {});
         player.setCloudVoice(appState.cloudVoice);
         const session = player.session();
         if (session && isBlocked(session.url)) player.stop(BLOCKED_MESSAGE);
@@ -158,12 +162,11 @@ const bridge = createBridge({
   },
   onStatus: (value) => {
     connected = value;
-    if (!value) {
-      appState = sanitizeState(EMPTY_STATE);
-      haveState = false;
-    }
+    // The site rules are kept for isBlocked; what may leave the Mac is only known while connected
+    // (offMacRefusal says "unknown" without haveState), and the cloud voice needs the app.
+    if (!value) haveState = false;
     ready.then(() => {
-      player.setCloudVoice(appState.cloudVoice);
+      player.setCloudVoice(connected ? appState.cloudVoice : null);
       if (value) player.resendStatus();
       broadcast();
     });
@@ -199,7 +202,7 @@ function snapshot() {
     connected,
     connection: describeConnection(connected, problem),
     sceneJob,
-    mode: appState.mode,
+    mode: enforcedState().mode,
   };
 }
 
@@ -207,8 +210,13 @@ function broadcast() {
   chrome.runtime.sendMessage({ type: "player.state", player: snapshot() }).catch(() => {});
 }
 
+/** The rules as enforced now: while the app is away, a locked strict phase it reported stays strict. */
+function enforcedState() {
+  return !connected && strictLockUntil(appState) ? { ...appState, mode: "strict" } : appState;
+}
+
 function isBlocked(url) {
-  return /^https?:\/\//i.test(url || "") && siteVerdict(url, appState) === "blocked";
+  return /^https?:\/\//i.test(url || "") && siteVerdict(url, enforcedState()) === "blocked";
 }
 
 // ---- loading articles -------------------------------------------------------------------------

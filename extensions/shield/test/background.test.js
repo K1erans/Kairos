@@ -276,3 +276,180 @@ test("the popup says the bridge is not installed when Chrome cannot find the hos
   globalThis.chrome.runtime.lastError = undefined;
   assert.match((await h.send({ type: "popup.get", url: BLOG })).connection.text, /bridge is not installed/);
 });
+
+// ---- the popup's manual mode ------------------------------------------------------------------
+
+test("a manual mode chosen while the app was away is forgotten when it comes back", async (t) => {
+  const state = { current: focus() };
+  const h = await startShield({ app: fakeApp(() => state.current) });
+  t.after(() => h.dispose());
+  await h.drop();
+  assert.equal((await h.send({ type: "popup.setMode", mode: "off" })).ok, true);
+  assert.equal((await h.send({ type: "page.query", url: YT })).verdict, "off");
+  await h.reconnect(fakeApp(() => state.current));
+  assert.equal(h.local.manualMode, null, "cleared in storage, so a browser restart does not bring it back");
+  assert.equal((await h.send({ type: "popup.get", url: YT })).manualMode, null);
+  await h.drop();
+  assert.equal((await h.send({ type: "page.query", url: YT })).verdict, "blocked", "the next disconnect keeps the app's mode");
+});
+
+test("a stale manual mode in storage gives way to the app's mode once it connects", async (t) => {
+  const state = { current: focus() };
+  const h = await startShield({ app: fakeApp(() => state.current), storage: { local: { state: focus(), manualMode: "off" } } });
+  t.after(() => h.dispose());
+  assert.equal(h.local.manualMode, null);
+  await h.drop();
+  assert.equal((await h.send({ type: "page.query", url: YT })).verdict, "blocked");
+});
+
+// ---- local overrides ----------------------------------------------------------------------------
+
+function overrideApp(state) {
+  return fakeApp(() => state.current, (msg, reply) => {
+    if (msg.type === "override.request") reply({ type: "override.result", id: msg.id, allowed: true, until: Date.now() + 5 * 60_000, remaining: 2 });
+  });
+}
+
+test("an override granted in focus does not keep working once the app pushes strict without it", async (t) => {
+  const state = { current: focus({ overridesLeft: 3 }) };
+  const h = await startShield({ app: overrideApp(state) });
+  t.after(() => h.dispose());
+  assert.equal((await h.send({ type: "override", target: "youtube.com", reason: "lecture" })).allowed, true);
+  assert.equal((await h.send({ type: "page.query", url: YT })).verdict, "allowed", "works at once, before the app's push");
+  await h.push(focus({ mode: "strict" }));
+  assert.equal((await h.send({ type: "page.query", url: YT })).verdict, "blocked");
+  assert.deepEqual(h.local.localAllows, {});
+  await h.push(focus());
+  assert.equal((await h.send({ type: "page.query", url: YT })).verdict, "blocked", "and does not come back in the next focus session");
+});
+
+test("while connected the app's temporaryAllows decide, not a grant made while it was away", async (t) => {
+  const state = { current: focus() };
+  const h = await startShield({ app: fakeApp(() => state.current) });
+  t.after(() => h.dispose());
+  await h.drop();
+  assert.equal((await h.send({ type: "override", target: "youtube.com", reason: "lecture" })).allowed, true);
+  assert.equal((await h.send({ type: "page.query", url: YT })).verdict, "allowed");
+  await h.reconnect(fakeApp(() => state.current));
+  assert.equal((await h.send({ type: "page.query", url: YT })).verdict, "blocked");
+});
+
+test("switching the popup out of focus ends a local grant", async (t) => {
+  const h = await startShield({ storage: { local: { state: focus() } } });
+  t.after(() => h.dispose());
+  assert.equal((await h.send({ type: "override", target: "youtube.com", reason: "lecture" })).allowed, true);
+  await h.send({ type: "popup.setMode", mode: "strict" });
+  await h.send({ type: "popup.setMode", mode: "focus" });
+  assert.equal((await h.send({ type: "page.query", url: YT })).verdict, "blocked");
+});
+
+// ---- pages that loaded without a request the rules saw ----------------------------------------
+
+test("a page the content script finds blocked (back/forward cache) is sent to the block page", async (t) => {
+  const h = await startShield({ app: fakeApp(() => focus()) });
+  t.after(() => h.dispose());
+  await h.send({ type: "page.blocked" }, { tab: { id: 7, url: YT }, frameId: 0, url: YT });
+  assert.deepEqual(h.tabUpdates, [{ tabId: 7, url: `chrome-extension://shield/blocked.html#${YT}` }]);
+  await h.send({ type: "page.blocked" }, { tab: { id: 8, url: BLOG }, frameId: 0, url: BLOG });
+  await h.send({ type: "page.blocked" }, { tab: { id: 9, url: BLOG }, frameId: 3, url: YT });
+  assert.equal(h.tabUpdates.length, 1, "only a blocked top frame moves the tab");
+});
+
+test("a tab whose URL changes to a blocked site goes to the block page", async (t) => {
+  const h = await startShield({ app: fakeApp(() => focus()) });
+  t.after(() => h.dispose());
+  h.tabsOnUpdated.fire(5, { url: YT }, { id: 5, url: YT });
+  h.tabsOnUpdated.fire(6, { url: BLOG }, { id: 6, url: BLOG });
+  await tick(10);
+  assert.deepEqual(h.tabUpdates, [{ tabId: 5, url: `chrome-extension://shield/blocked.html#${YT}` }]);
+  assert.ok(h.toTabs.some((m) => m.tabId === 6 && m.msg.type === "page.navigated"));
+});
+
+// ---- Jev: slow answers ------------------------------------------------------------------------
+
+/** A fake app whose jev.check answers wait until the test releases them. */
+function slowJevApp(state) {
+  const waiting = [];
+  const app = fakeApp(() => state.current, (msg, reply) => {
+    if (msg.type === "jev.check") waiting.push((verdict) => reply({ type: "jev.result", id: msg.id, ...verdict }));
+  });
+  return { app, waiting };
+}
+const TAB = { tab: { id: 4, incognito: false }, frameId: 0 };
+
+test("when the app is slow, its fail-closed setting decides, and the late answer is applied", async (t) => {
+  const state = { current: focus({ rules: { jevEnabled: true, jevFailClosed: true, blockSites: ["youtube.com"] } }) };
+  const { app, waiting } = slowJevApp(state);
+  const h = await startShield({ app, timeScale: 0.01 });
+  t.after(() => h.dispose());
+  assert.equal((await h.send(PAGE, TAB)).block, true, "fail-closed blocks on a timeout");
+  waiting.shift()({ choice: "relevant", block: false });
+  await tick(20);
+  const late = h.toTabs.find((m) => m.msg.type === "jev.late");
+  assert.deepEqual([late.tabId, late.msg.url, late.msg.block], [4, PAGE.url, false], "the page is told it may show after all");
+  assert.equal((await h.send(PAGE, TAB)).block, false, "the late answer was cached");
+  assert.equal(h.sent("jev.check").length, 1);
+});
+
+test("fail-open lets a slow page through, then blocks it when Jev's late answer says so", async (t) => {
+  const state = { current: focus() };
+  const { app, waiting } = slowJevApp(state);
+  const h = await startShield({ app, timeScale: 0.01 });
+  t.after(() => h.dispose());
+  assert.equal((await h.send(PAGE, TAB)).block, false);
+  waiting.shift()({ choice: "distracting", block: true });
+  await tick(20);
+  const late = h.toTabs.find((m) => m.msg.type === "jev.late");
+  assert.equal(late.msg.block, true);
+  assert.equal(late.msg.mode, "focus", "carries what the overlay shows");
+  assert.equal(h.sent("blockEvent").length, 1);
+});
+
+test("asking again while Jev is still answering does not send a second check", async (t) => {
+  const state = { current: focus() };
+  const { app, waiting } = slowJevApp(state);
+  const h = await startShield({ app, timeScale: 0.01 });
+  t.after(() => h.dispose());
+  const first = h.send(PAGE, TAB);
+  const second = h.send({ ...PAGE, url: `${PAGE.url}#comments` }, TAB);
+  await tick(20);
+  waiting.shift()({ choice: "distracting", block: true });
+  assert.deepEqual([(await first).block, (await second).block], [true, true]);
+  assert.equal(h.sent("jev.check").length, 1);
+});
+
+// ---- the block page in a frame ----------------------------------------------------------------
+
+test("Back only works from the top frame", async (t) => {
+  const h = await startShield({ app: fakeApp(() => focus()) });
+  t.after(() => h.dispose());
+  const blockedUrl = `chrome-extension://shield/blocked.html#${YT}`;
+  await h.send({ type: "goBack" }, { tab: { id: 2, url: "https://evil.example/" }, frameId: 5, url: blockedUrl });
+  assert.deepEqual(h.wentBack, [], "a framed block page cannot act on the tab");
+  await h.send({ type: "goBack" }, { tab: { id: 2, url: blockedUrl }, frameId: 0, url: blockedUrl });
+  assert.deepEqual(h.wentBack, [2]);
+  await h.send({ type: "goBack" }, { tab: { id: 3, url: BLOG }, frameId: 0, url: BLOG });
+  assert.deepEqual(h.wentBack, [2, 3], "the Jev overlay's Back (content script, top frame) still works");
+});
+
+test("a framed block page cannot ask for an override either", async (t) => {
+  const state = { current: focus({ overridesLeft: 3 }) };
+  const h = await startShield({ app: overrideApp(state) });
+  t.after(() => h.dispose());
+  const blockedUrl = `chrome-extension://shield/blocked.html#${YT}`;
+  const reply = await h.send({ type: "override", target: "youtube.com", reason: "x" }, { tab: { id: 2, url: "https://evil.example/" }, frameId: 1, url: blockedUrl });
+  assert.notEqual(reply.allowed, true);
+  assert.equal(h.sent("override.request").length, 0);
+});
+
+// ---- reconnecting -----------------------------------------------------------------------------
+
+test("a disconnect sets the reconnect alarm, and connecting clears it", async (t) => {
+  const state = { current: focus() };
+  const h = await startShield({ app: fakeApp(() => state.current) });
+  t.after(() => h.dispose());
+  await h.drop();
+  assert.ok(h.alarms.created["kairos-bridge-reconnect"]);
+  await h.reconnect(fakeApp(() => state.current));
+  assert.equal(h.alarms.created["kairos-bridge-reconnect"], undefined);
+});

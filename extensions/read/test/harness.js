@@ -125,6 +125,7 @@ export async function startRead({ storage = {}, app = null, tabs = [], windows =
     sidePanel: { setPanelBehavior: async () => {}, open: async () => {} },
     contextMenus: { removeAll: (cb) => cb && cb(), create: () => {}, onClicked: events() },
     commands: { onCommand: events() },
+    alarms: { create: () => {}, clear: async () => true, onAlarm: events() },
     offscreen: {
       createDocument: async () => {
         if (offscreen.open) {
