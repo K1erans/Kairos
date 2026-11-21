@@ -152,11 +152,44 @@ enum Apps {
     static func open(_ bundleId: String) {
         let running = NSWorkspace.shared.runningApplications.first { $0.bundleIdentifier == bundleId }
         running?.unhide()
-        // The copy that is running, when there is more than one on the Mac.
-        guard let u = running?.bundleURL ?? url(bundleId) else { return }
+        // The copy that is running, when there is more than one on the Mac, then the copy Launch
+        // Services knows. A running copy's path can stop opening (an App Translocation copy, or
+        // one moved or replaced by an update), so a failure there retries the registered copy.
+        var candidates: [URL] = []
+        for u in [running?.bundleURL, url(bundleId)].compactMap({ $0 }) where !candidates.contains(u) { candidates.append(u) }
+        guard !candidates.isEmpty else {
+            if let running, running.activate() { return }
+            failedToOpen(bundleId, reason: "Kairos can't find it on this Mac. It may have been moved or deleted.")
+            return
+        }
+        open(bundleId, trying: candidates[...], running: running)
+    }
+
+    private static func open(_ bundleId: String, trying urls: ArraySlice<URL>, running: NSRunningApplication?) {
+        guard let u = urls.first else { return }
         let configuration = NSWorkspace.OpenConfiguration()
         configuration.activates = true
-        NSWorkspace.shared.openApplication(at: u, configuration: configuration)
+        NSWorkspace.shared.openApplication(at: u, configuration: configuration) { _, error in
+            guard let error else { return }
+            DispatchQueue.main.async {
+                NSLog("Kairos: opening %@ at %@ failed: %@", bundleId, u.path, String(describing: error))
+                if urls.count > 1 {
+                    open(bundleId, trying: urls.dropFirst(), running: running)
+                } else if !(running?.activate() ?? false) {
+                    failedToOpen(bundleId, reason: error.localizedDescription)
+                }
+            }
+        }
+    }
+
+    /// A click that opens nothing says why, instead of failing silently.
+    private static func failedToOpen(_ bundleId: String, reason: String) {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "\(name(bundleId)) didn't open"
+        alert.informativeText = reason
+        NSApp.activate(ignoringOtherApps: true)
+        alert.runModal()
     }
 
     /// The display showing the app's frontmost normal window. Window bounds need no permission.

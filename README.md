@@ -10,7 +10,8 @@ A Mac focus app with two Chrome extensions.
 - **Kairos Read** (`extensions/read`): reads articles aloud and builds 3D scenes from them.
 - `packages/shared/PROTOCOL.md` is the message contract between the app and the extensions.
 
-Kairos Desktop needs macOS 14 or later. The extensions run in Chromium browsers (Chrome, Brave,
+Kairos Desktop needs macOS 14 or later. `apps/linux` is the same app for Linux Mint (Cinnamon on
+X11); see `apps/linux/README.md`. The extensions run in Chromium browsers (Chrome, Brave,
 Arc, Edge, Vivaldi); Safari and Firefox cannot run them.
 
 ## Build
