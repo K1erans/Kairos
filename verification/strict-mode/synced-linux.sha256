@@ -1,0 +1,11 @@
+f99fb27a4e3102661343229c82a5a886c0cf431f8e4f96e4e9ab50bad05d254d  apps/linux/crates/kairos-core/src/rules.rs
+06fc921c6861665118e18fa4690b25be1611185217d481dbe0dc5096f130ea03  apps/linux/crates/kairos-core/src/tempo.rs
+6bbc94ae533a638536d3dd8324d4844c5f9b48a538c5a421e6601e5d2071e216  apps/linux/crates/kairos-core/src/models.rs
+10d01b9df817ec3ae6c58ae0dd9de532134cf2d99e95f7c7bcac9d1b47fdca4f  apps/linux/crates/kairos-core/src/history.rs
+16419e5a6fa24a79cb48fab047128c4e578d934dde62905892e150b540793219  apps/linux/crates/kairos/src/model.rs
+89b9b07bb6cc1d8150e5a60ad18b0ca9294e503fc4a75e0cc09863d62d7d5d9c  apps/linux/crates/kairos/src/main.rs
+4335f0e444e90e51e6c4c87c7e06e9f54c810782b2bdc6cd6606dbda3d68b430  apps/linux/crates/kairos/src/platform/tray.rs
+6771d989014be30483f27f27a4d7ca289c153a1520f66e7f3070751d87383d6e  apps/linux/crates/kairos/src/ui/pages.rs
+6e4bf3fe461ae8fa0f18705e361deceab45a7cb9f57d0af2f942a6c2517c8e0b  apps/linux/crates/kairos/src/ui/window.rs
+16d68a4ee1cc6ff5066e2fe5f41721672b0e41d951855ef1e491790a971a2111  apps/linux/crates/kairos/src/ui/bar.rs
+1d4ed2161cc4434ecc0a54d304f5cd8b7529dd374f5a3a6bdd0758a3d42c19f7  apps/linux/crates/kairos/src/ui/widgets.rs

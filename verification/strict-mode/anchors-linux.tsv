@@ -1,0 +1,55 @@
+# file	expected count	exact text	what in StrictMode.tla mirrors it (Kairos for Linux, apps/linux)
+apps/linux/crates/kairos-core/src/rules.rs	1	if mode == Mode::Strict {	LedgerRefusesStrict in Override (OverrideLedger::request)
+apps/linux/crates/kairos-core/src/rules.rs	1	return Err(Refusal::Strict);	LedgerRefusesStrict in Override
+apps/linux/crates/kairos-core/src/rules.rs	1	if mode != Mode::Focus {	mode = "focus" in Override
+apps/linux/crates/kairos-core/src/rules.rs	1	if self.used >= max {	LedgerChecksMax in Override
+apps/linux/crates/kairos-core/src/rules.rs	1	self.used = 0;	Ledger (OverrideLedger::reset)
+apps/linux/crates/kairos-core/src/rules.rs	1	self.allows.clear();	Ledger (OverrideLedger::reset)
+apps/linux/crates/kairos-core/src/models.rs	1	matches!(self, Mode::Focus | Mode::Strict)	Blocks (Mode::blocks)
+apps/linux/crates/kairos-core/src/tempo.rs	1	if self.holds_strict || self.preset.strict {	TempoMode (TempoEngine::mode)
+apps/linux/crates/kairos-core/src/tempo.rs	1	self.pending_preset = Some(preset);	SwitchGroup (TempoEngine::use_preset while not idle)
+apps/linux/crates/kairos-core/src/tempo.rs	1	self.holds_strict = strict;	holds in StartFocus (TempoEngine::start)
+apps/linux/crates/kairos-core/src/tempo.rs	1	self.holds_strict = false;	Halt (TempoEngine::reset)
+apps/linux/crates/kairos-core/src/tempo.rs	1	if let Some(p) = self.pending_preset.take() {	PresetAfterPending (take_pending_preset)
+apps/linux/crates/kairos-core/src/tempo.rs	1	if waits_after_break && finished.is_break() {	Halt("BreakOver") in TimeUp
+apps/linux/crates/kairos-core/src/tempo.rs	1	self.holds_strict = true;	holds' = TRUE in Relaunch (TempoEngine::resume_strict)
+apps/linux/crates/kairos/src/model.rs	1	if (new.blocks() && !old.blocks()) || (new == Mode::Strict && old != Mode::Strict) {	Ledger (blocking turns on, ResetsOnEnterStrict) in Model::mode_changed
+apps/linux/crates/kairos/src/model.rs	2	s.ledger.reset();	Ledger (the two reset sites: mode_changed and TempoEvent::Started(Focus) in apply)
+apps/linux/crates/kairos/src/model.rs	1	if s.tempo.phase() != TempoPhase::Idle {	SyncsModeFromTimer in Synced (sync_focus_from_tempo)
+apps/linux/crates/kairos/src/model.rs	1	focus.mode = s.tempo.mode();	SyncsModeFromTimer in Synced
+apps/linux/crates/kairos/src/model.rs	1	self.edit(|d| d.focus.mode = Mode::Off);	mode' = "off" in Halt
+apps/linux/crates/kairos/src/model.rs	1	TempoEvent::Stopped | TempoEvent::AwaitingFocus => {	mode' = "off" in Halt, for BreakOver as for Stop
+apps/linux/crates/kairos/src/model.rs	1	let strict = s.mode() == Mode::Strict;	holds in StartFocus (Model::start_focus)
+apps/linux/crates/kairos/src/model.rs	1	s.tempo.start(TempoPhase::Focus, strict, time::now())	StartFocus
+apps/linux/crates/kairos/src/model.rs	2	if self.s().strict_locked() {	Skip and Stop (LocksStrictControls: skip_phase and stop_timer return early)
+apps/linux/crates/kairos/src/model.rs	1	s.ledger.request(target, reason, mode, max, minutes, time::now())	Override (Model::request_override)
+apps/linux/crates/kairos/src/model.rs	1	self.tempo.phase() == TempoPhase::Focus && self.mode() == Mode::Strict	InStrictPhase (State::strict_locked)
+apps/linux/crates/kairos/src/model.rs	1	if mode == self.s().mode() {	m # mode in SetMode (Model::set_mode; no timer check here, the views lock it)
+apps/linux/crates/kairos/src/ui/pages.rs	1	b.set_sensitive(idle);	PickerLockedByTimer in SetMode (mode_picker on Today)
+apps/linux/crates/kairos/src/platform/tray.rs	2	enabled: !s.mode_locked,	PickerLockedByTimer in SetMode (the tray Mode submenu and its items)
+apps/linux/crates/kairos/src/main.rs	1	mode_locked: !idle,	PickerLockedByTimer in SetMode (tray snapshot)
+apps/linux/crates/kairos/src/main.rs	1	TrayCommand::SetMode(mode) => m.set_mode(mode),	SetMode (tray; not rechecked on arrival)
+apps/linux/crates/kairos/src/ui/pages.rs	1	skip.set_sensitive(!s.strict_locked());	LocksStrictControls (Skip button on Today)
+apps/linux/crates/kairos/src/ui/pages.rs	1	stop.set_sensitive(!s.strict_locked());	LocksStrictControls (Stop button on Today)
+apps/linux/crates/kairos/src/platform/tray.rs	1	m.push(Self::item("Skip", !s.strict_locked, Some(TrayCommand::Skip)));	LocksStrictControls (tray Skip)
+apps/linux/crates/kairos/src/platform/tray.rs	1	m.push(Self::item("Stop", !s.strict_locked, Some(TrayCommand::Stop)));	LocksStrictControls (tray Stop)
+apps/linux/crates/kairos/src/main.rs	1	if !signal && self.model.s().strict_locked() {	QuitLocked in Quit (App::quit, from the tray Quit)
+apps/linux/crates/kairos/src/main.rs	1	self.app.quit();	Quit and ForceQuit (the only place Kairos quits itself)
+apps/linux/crates/kairos/src/main.rs	1	me.quit(true);	ForceQuit (SIGINT, SIGTERM, SIGHUP: a logout cannot be refused)
+apps/linux/crates/kairos/src/main.rs	1	quit_note: if s.strict_locked() {	QuitLocked in Quit (tray Quit disabled, with the note)
+apps/linux/crates/kairos/src/platform/tray.rs	1	m.push(Self::item("Quit Kairos", s.quit_note.is_none(), Some(TrayCommand::Quit)));	QuitLocked in Quit (tray Quit Kairos)
+apps/linux/crates/kairos/src/ui/window.rs	1	window.set_hide_on_close(true);	no Quit step: closing the window only hides it
+apps/linux/crates/kairos/src/model.rs	1	focus.strict_until = if s.tempo.phase() == TempoPhase::Focus && focus.mode == Mode::Strict {	downStrict' = InStrictPhase in Quit and ForceQuit
+apps/linux/crates/kairos-core/src/history.rs	1	if let Some(until) = self.focus.strict_until {	ResumesStrict in Relaunch (AppData::recover_after_launch)
+apps/linux/crates/kairos-core/src/history.rs	1	self.focus.mode = crate::models::Mode::Strict;	mode' = "strict" in Relaunch
+apps/linux/crates/kairos/src/model.rs	1	tempo.resume_strict(r);	ResumesStrict in Relaunch (Model::new)
+apps/linux/crates/kairos-core/src/rules.rs	1	if g == self.groups[i] || (locked && rule_lock::loosens(&self.groups[i], &g)) {	LocksRules in EditRules (AppData::update_group)
+apps/linux/crates/kairos-core/src/rules.rs	1	let locked = strict_locked && Some(id) == self.active_group().map(|g| g.id);	EditRules (the active group, whose rules are in force)
+apps/linux/crates/kairos-core/src/rules.rs	3	self.update_group(id, strict_locked, |g|	EditRules (add_site, set_app_blocked, set_element_hidden)
+apps/linux/crates/kairos/src/model.rs	3	let locked = self.s().strict_locked();	EditRules (Model::update_group, Model::set_app_blocked, bridge handle)
+apps/linux/crates/kairos/src/model.rs	1	self.edit(|d| changed = d.update_group(id, locked, f));	EditRules (Rules and Groups pages)
+apps/linux/crates/kairos/src/model.rs	2	d.set_element_hidden(&sel, &host,	EditRules (rule.addElement, rule.removeElement)
+apps/linux/crates/kairos/src/model.rs	1	self.edit(|d| ok = d.add_site(&site, list, locked));	EditRules (rule.addSite)
+apps/linux/crates/kairos/src/model.rs	1	self.edit(|d| changed = d.set_app_blocked(app, blocked, locked));	EditRules (Kairos Bar's Block and Unblock)
+apps/linux/crates/kairos/src/model.rs	1	if Some(id) == s.data.focus.active_group_id {	SwitchGroup (Model::switch_group: no strict guard, StrictKeepsGroup)
+apps/linux/crates/kairos/src/model.rs	2	self.state.borrow_mut().tempo.use_preset(preset);	SwitchGroup (switch_group and import_data call TempoEngine::use_preset)
