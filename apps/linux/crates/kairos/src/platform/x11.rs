@@ -249,6 +249,11 @@ impl X11 {
         self.client_message(w, self.atoms._NET_ACTIVE_WINDOW, [2, CURRENT_TIME, 0, 0, 0]);
     }
 
+    /// Moves a window to the workspace on screen, as a pager would.
+    pub fn move_to_current_desktop(&self, w: Window) {
+        self.client_message(w, self.atoms._NET_WM_DESKTOP, [self.current_desktop(), 2, 0, 0, 0]);
+    }
+
     pub fn close(&self, w: Window) {
         self.client_message(w, self.atoms._NET_CLOSE_WINDOW, [CURRENT_TIME, 2, 0, 0, 0]);
     }

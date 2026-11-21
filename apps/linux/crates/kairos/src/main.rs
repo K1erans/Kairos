@@ -248,7 +248,7 @@ fn install_hooks(me: &Rc<App>) {
         let weak = Rc::downgrade(me);
         hooks.show_main_window = Some(Rc::new(move || {
             if let Some(me) = weak.upgrade() {
-                me.window.present();
+                me.show_window();
             }
         }));
     }
@@ -284,13 +284,40 @@ fn install_hooks(me: &Rc<App>) {
     let weak = Rc::downgrade(me);
     show.connect_activate(move |_, _| {
         if let Some(me) = weak.upgrade() {
-            me.window.present();
+            me.show_window();
         }
     });
     me.app.add_action(&show);
 }
 
 impl App {
+    /// Shows the main window and brings it forward. present() alone is not enough for an
+    /// already-open window: without a user timestamp Muffin's focus-stealing prevention only
+    /// marks it as wanting attention, which shows nowhere while Kairos hides the panel. So the
+    /// window is also activated as a pager would, which Muffin obeys, after moving it to the
+    /// workspace on screen (Muffin ignores activation across workspaces). A window that was hidden
+    /// is mapped a moment after present(), so it is activated again then.
+    fn show_window(self: &Rc<Self>) {
+        self.window.present();
+        self.activate_window();
+        let weak = Rc::downgrade(self);
+        glib::timeout_add_local_once(Duration::from_millis(150), move || {
+            if let Some(me) = weak.upgrade() {
+                me.activate_window();
+            }
+        });
+    }
+
+    fn activate_window(&self) {
+        let Some(x) = &self.x else { return };
+        let surface = self.window.window.surface().and_then(|s| s.downcast::<gdk4_x11::X11Surface>().ok());
+        if let Some(xid) = surface.map(|s| s.xid() as u32) {
+            // Muffin won't activate a window on another workspace, so it comes to this one.
+            x.move_to_current_desktop(xid);
+            x.activate(xid);
+        }
+    }
+
     fn grab_hotkeys(&self) {
         let Some(x) = &self.x else { return };
         let plan = HotkeyPlan::new(&self.model.s().data.settings);
@@ -412,7 +439,7 @@ impl App {
             TrayCommand::NewGroup => ui::widgets::actions::new_group(m),
             TrayCommand::SetMode(mode) => m.set_mode(mode),
             TrayCommand::QuickAdd => ui::quickadd::show(&self.app, m),
-            TrayCommand::Open => self.window.present(),
+            TrayCommand::Open => self.show_window(),
             TrayCommand::ToggleBar => m.edit(|d| d.settings.dock_visible = !d.settings.dock_visible),
             TrayCommand::Quit => self.quit(false),
         }
