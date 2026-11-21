@@ -1,0 +1,22 @@
+[package]
+name = "kairos"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "kairos"
+path = "src/main.rs"
+
+[dependencies]
+kairos-core = { path = "../kairos-core" }
+serde_json.workspace = true
+chrono.workspace = true
+gtk = { package = "gtk4", version = "0.9", features = ["v4_14"] }
+pangocairo = "0.20"
+gdk4-x11 = "0.9"
+x11rb = { version = "0.13", features = ["allow-unsafe-code"] }
+ksni = "0.2"
+keyring = { version = "3", features = ["sync-secret-service", "crypto-rust"] }
+gstreamer = "0.23"
+async-channel = "2"
+libc = "0.2"

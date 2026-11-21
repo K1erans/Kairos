@@ -1,0 +1,8 @@
+[package]
+name = "kairos-host"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+kairos-core = { path = "../kairos-core" }
+serde_json.workspace = true
