@@ -66,7 +66,7 @@ The two platforms use the same idea: save the owner's setting, apply Kairos's ow
 
 ### Fix switches
 
-There are four switches. The Rust code today has none of the four fixes, so the `code` run sets all of them to FALSE.
+There are four switches. The Rust code has had all four since 2026-11-21 (`recover()`, `is_own_setting()`, the script's `rm -f "$0"` and `panel.lock` in `panel.rs`), so the `code` run sets all of them to TRUE.
 
 | Switch | What the code would do |
 | --- | --- |
@@ -75,11 +75,13 @@ There are four switches. The Rust code today has none of the four fixes, so the 
 | `ScriptRemovesItself` | `restore-panel.sh` ends with `rm -f "$0"`, as the Mac script does. |
 | `ScriptLocked` | The script holds a lock from before its `pgrep` until after its `rm`, and `replace()` and `restore()` take the same lock (for example `flock` on a file in the data folder). A Kairos that starts mid-script then waits for the script to finish. |
 
-`--mutants` for Linux runs all four switched on. This is the proposed fix, not the code. It then runs again with each switch turned off on its own. All five properties hold with every switch on. Turning off `RecoversFromScript` or `ScriptLocked` breaks `WayBack`, `WatchdogCovers` and `BackWhenNotReplacing`. Turning off `ScriptRemovesItself` breaks `LeavesOwnersPanel`. Turning off `RefusesOwnValues` breaks nothing in this model: it is a backstop for the case where `restore-panel.sh` is deleted while the panel is hidden, and the model leaves that case out, as the Mac model does.
+`--mutants` for Linux also runs the code as it was before the fixes (all five fail), then the code with each switch turned off on its own. All five properties hold on the code as it is. Turning off `RecoversFromScript` or `ScriptLocked` breaks `WayBack`, `WatchdogCovers` and `BackWhenNotReplacing`. Turning off `ScriptRemovesItself` breaks `LeavesOwnersPanel`. Turning off `RefusesOwnValues` breaks nothing in this model: it is a backstop for the case where `restore-panel.sh` is deleted while the panel is hidden, and the model leaves that case out, as the Mac model does.
 
-## Results on the Rust code (2026-11-21)
+## Results on the Rust code
 
-All five properties fail on the code as it is. Each failure was walked through the Rust code, and all are real bugs, not modelling errors. Every one of them, except the last, needs `panel-saved.json` to be gone while the panel is hidden. Kairos does that to itself:
+All five properties hold since the fixes of 2026-11-21. The script also stops the timer (`systemctl --user disable --now`) after it puts the panel back; it does that while holding `panel.lock`, so a Kairos that starts meanwhile re-enables the timer in `replace()` after it. The rest of this section records what the check found before the fixes.
+
+All five properties failed on the code before the fixes. Each failure was walked through the Rust code, and all are real bugs, not modelling errors. Every one of them, except the last, needs `panel-saved.json` to be gone while the panel is hidden. Kairos does that to itself:
 
 **How `panel-saved.json` goes missing with no one deleting it.** TLC finds this trace even with `PrefsLost` removed from the model:
 

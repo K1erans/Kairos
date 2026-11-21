@@ -2,6 +2,16 @@
 //! Kairos sets every panel to auto-hide (org.cinnamon panels-autohide) with a long show delay,
 //! saving the owner's values first. A small restore script puts them back, and a systemd user
 //! timer runs it whenever Kairos is not running, so a crash never leaves the panel hidden.
+//!
+//! `verification/system-dock/CinnamonPanel.tla` checks this. Four things keep the owner's panel
+//! safe there, each named after the model's switch:
+//! - RecoversFromScript: with nothing saved, `replace()` and `restore()` first run a leftover
+//!   restore script, which holds the owner's values.
+//! - RefusesOwnValues: `replace()` never records Kairos's own hidden setting as the owner's.
+//! - ScriptRemovesItself: the script deletes itself and stops the timer once it has run, so it
+//!   cannot keep undoing panel changes the owner makes later.
+//! - ScriptLocked: the script and `replace()`/`restore()` share a lock (`panel.lock`), so a
+//!   Kairos that starts while the script runs waits for it instead of racing it.
 
 use crate::store;
 use serde::{Deserialize, Serialize};
@@ -84,18 +94,38 @@ pub fn restore_script_path() -> PathBuf {
     store::default_directory().join("restore-panel.sh")
 }
 
-/// The restore script: puts the saved values back unless Kairos is running.
+pub fn lock_path() -> PathBuf {
+    store::default_directory().join("panel.lock")
+}
+
+/// The restore script: puts the saved values back unless Kairos is running, then removes the
+/// saved values, stops the timer and deletes itself. It holds `panel.lock` from before its
+/// check until it ends. `--force` is Kairos running it while already holding the lock.
 pub fn restore_script(saved: &Saved) -> String {
     format!(
         "#!/bin/sh\n# Written by Kairos. Restores Cinnamon's panel if Kairos is not running.\n\
-         if pgrep -x kairos >/dev/null 2>&1 && [ \"$1\" != \"--force\" ]; then exit 0; fi\n\
-         gsettings set {SCHEMA} {AUTOHIDE} \"{}\"\n\
-         gsettings set {SCHEMA} {SHOW_DELAY} \"{}\"\n\
-         rm -f \"{}\"\n",
-        saved.autohide.replace('"', "\\\""),
-        saved.show_delay.replace('"', "\\\""),
-        saved_path().display()
+         if [ \"$1\" != \"--force\" ]; then\n\
+         \x20 exec 9>\"{lock}\"\n\
+         \x20 flock 9\n\
+         \x20 if pgrep -x kairos >/dev/null 2>&1; then exit 0; fi\n\
+         fi\n\
+         gsettings set {SCHEMA} {AUTOHIDE} \"{autohide}\"\n\
+         gsettings set {SCHEMA} {SHOW_DELAY} \"{delay}\"\n\
+         rm -f \"{saved}\"\n\
+         systemctl --user disable --now {UNIT}.timer >/dev/null 2>&1\n\
+         rm -f \"$0\"\n",
+        lock = lock_path().display(),
+        autohide = saved.autohide.replace('"', "\\\""),
+        delay = saved.show_delay.replace('"', "\\\""),
+        saved = saved_path().display()
     )
+}
+
+/// Whether these are the values `replace()` sets: every panel auto-hidden with Kairos's delay.
+pub fn is_own_setting(autohide: &str, show_delay: &str) -> bool {
+    let hide = parse_array(autohide);
+    let delay = parse_array(show_delay);
+    !hide.is_empty() && hide.iter().all(|e| e.ends_with(":true")) && !delay.is_empty() && delay.iter().all(|e| e.ends_with(":2000"))
 }
 
 pub const UNIT: &str = "kairos-panel-watchdog";
@@ -121,6 +151,10 @@ fn gsettings_get(key: &str) -> Option<String> {
         return None;
     }
     Some(String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
+fn gsettings_reset(key: &str) {
+    let _ = Command::new("gsettings").args(["reset", SCHEMA, key]).status();
 }
 
 fn gsettings_set(key: &str, value: &str) -> bool {
@@ -149,6 +183,25 @@ impl std::fmt::Display for PanelError {
     }
 }
 
+/// Holds `panel.lock`, shared with the restore script, until dropped.
+struct PanelLock(Option<std::fs::File>);
+
+fn lock() -> PanelLock {
+    let _ = std::fs::create_dir_all(store::default_directory());
+    let file = std::fs::OpenOptions::new().create(true).truncate(false).write(true).open(lock_path()).ok();
+    // Without a lock file, carry on: hiding or restoring the panel matters more than the race.
+    PanelLock(file.filter(|f| f.lock().is_ok()))
+}
+
+/// With nothing saved, a restore script left on disk holds the owner's values (Kairos crashed
+/// with them saved, then lost the file). Run it to put them back before going on.
+fn recover() {
+    let script = restore_script_path();
+    if load_saved().is_none() && script.exists() {
+        let _ = Command::new("/bin/sh").arg(&script).arg("--force").status();
+    }
+}
+
 /// Hides Cinnamon's panels behind Kairos Bar, saving the owner's settings the first time.
 pub fn replace() -> Result<(), PanelError> {
     if store::is_scratch() {
@@ -156,13 +209,22 @@ pub fn replace() -> Result<(), PanelError> {
     }
     let enabled = gsettings_get(ENABLED).ok_or(PanelError::NotCinnamon)?;
     let ids = panel_ids(&parse_array(&enabled));
+    let _lock = lock();
+    recover();
     let saved = match load_saved() {
         Some(s) => s,
         None => {
-            let s = Saved {
-                autohide: gsettings_get(AUTOHIDE).unwrap_or_else(|| "[]".into()),
-                show_delay: gsettings_get(SHOW_DELAY).unwrap_or_else(|| "[]".into()),
-            };
+            let mut autohide = gsettings_get(AUTOHIDE).unwrap_or_else(|| "[]".into());
+            let mut show_delay = gsettings_get(SHOW_DELAY).unwrap_or_else(|| "[]".into());
+            if is_own_setting(&autohide, &show_delay) {
+                // Kairos's own setting is on the panel and the owner's is lost: record Cinnamon's
+                // default rather than make hiding everything the owner's choice.
+                gsettings_reset(AUTOHIDE);
+                gsettings_reset(SHOW_DELAY);
+                autohide = gsettings_get(AUTOHIDE).unwrap_or_else(|| "[]".into());
+                show_delay = gsettings_get(SHOW_DELAY).unwrap_or_else(|| "[]".into());
+            }
+            let s = Saved { autohide, show_delay };
             let json = serde_json::to_vec_pretty(&s).map_err(|e| PanelError::Failed(e.to_string()))?;
             store::write_atomic(&saved_path(), &json).map_err(|e| PanelError::Failed(e.to_string()))?;
             s
@@ -181,6 +243,8 @@ pub fn restore() {
     if store::is_scratch() {
         return;
     }
+    let _lock = lock();
+    recover();
     if let Some(saved) = load_saved() {
         gsettings_set(AUTOHIDE, &saved.autohide);
         gsettings_set(SHOW_DELAY, &saved.show_delay);
@@ -230,5 +294,33 @@ mod tests {
         assert_eq!(format_array(&["1:true".into()]), "['1:true']");
         assert_eq!(panel_ids(&parse_array("['1:0:bottom', '2:1:left']")), vec!["1", "2"]);
         assert_eq!(autohide_all(&["1".into()]), vec!["1:true"]);
+    }
+
+    #[test]
+    fn knows_its_own_setting() {
+        assert!(is_own_setting("['1:true', '2:true']", "['1:2000', '2:2000']"));
+        assert!(!is_own_setting("['1:false']", "['1:2000']"));
+        assert!(!is_own_setting("['1:true']", "['1:0']"));
+        assert!(!is_own_setting("@as []", "@as []"));
+    }
+
+    #[test]
+    fn script_locks_checks_and_removes_itself() {
+        let s = restore_script(&Saved { autohide: "['1:false']".into(), show_delay: "['1:0']".into() });
+        let lock = s.find("flock 9").unwrap();
+        let check = s.find("pgrep -x kairos").unwrap();
+        let set = s.find("gsettings set").unwrap();
+        assert!(lock < check && check < set, "{s}");
+        assert!(s.contains("disable --now kairos-panel-watchdog.timer"));
+        assert!(s.trim_end().ends_with("rm -f \"$0\""));
+        if let Ok(out) = std::env::var("KAIROS_DUMP_RESTORE_SCRIPT") {
+            std::fs::write(out, &s).unwrap();
+        }
+        let check = Command::new("sh").arg("-n").stdin(std::process::Stdio::piped()).spawn().and_then(|mut c| {
+            use std::io::Write;
+            c.stdin.take().unwrap().write_all(s.as_bytes())?;
+            c.wait()
+        });
+        assert!(check.map(|st| st.success()).unwrap_or(true), "not valid sh:\n{s}");
     }
 }

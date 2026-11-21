@@ -75,18 +75,19 @@ if [ "$LINUX" = 1 ]; then
   [ "$MAC" = 1 ] && echo "== Linux: CinnamonPanel.tla"
   note synced-linux.sha256 "Read panel.rs (replace, restore, the script, the timer) and sync_panel(), finish() and --restore-panel in main.rs against CinnamonPanel.tla, then run check.sh --confirm --linux." "${LINUX_COVERED[@]}"
   PROPS="NeverSavesOwn WayBack WatchdogCovers BackWhenNotReplacing LeavesOwnersPanel"
-  # The Rust code today has none of the four fixes. Set a switch to TRUE here when the code gains it.
-  CODE="RecoversFromScript=FALSE RefusesOwnValues=FALSE ScriptRemovesItself=FALSE ScriptLocked=FALSE"
+  # The Rust code has all four fixes (panel.rs: recover(), is_own_setting(), the script's rm "$0",
+  # panel.lock). Set a switch to FALSE here if the code loses one.
+  CODE="RecoversFromScript=TRUE RefusesOwnValues=TRUE ScriptRemovesItself=TRUE ScriptLocked=TRUE"
   echo "The code as it is:"; run CinnamonPanel "$PROPS" code "$CODE" || status=1
   if [ "$MUTANTS" = 1 ]; then
-    # Not the code: the proposed fixes, to show together they are enough and each is needed.
-    FIXED="RecoversFromScript=TRUE RefusesOwnValues=TRUE ScriptRemovesItself=TRUE ScriptLocked=TRUE"
-    echo "With all four fixes (not the code yet):"; run CinnamonPanel "$PROPS" fixed "$FIXED"
-    echo "Fixed, but without running a leftover script first:"; run CinnamonPanel "$PROPS" no-recover "${FIXED/RecoversFromScript=TRUE/RecoversFromScript=FALSE}"
-    echo "Fixed, but without refusing Kairos's own values (a backstop: holds unless restore-panel.sh is deleted, which is not modelled):"
+    # Each fix switched off on its own, to show each is needed.
+    FIXED="$CODE"
+    echo "Before the fixes (the code until 2026-11-21):"; run CinnamonPanel "$PROPS" unfixed "RecoversFromScript=FALSE RefusesOwnValues=FALSE ScriptRemovesItself=FALSE ScriptLocked=FALSE"
+    echo "Without running a leftover script first:"; run CinnamonPanel "$PROPS" no-recover "${FIXED/RecoversFromScript=TRUE/RecoversFromScript=FALSE}"
+    echo "Without refusing Kairos's own values (a backstop: holds unless restore-panel.sh is deleted, which is not modelled):"
     run CinnamonPanel "$PROPS" no-refuse "${FIXED/RefusesOwnValues=TRUE/RefusesOwnValues=FALSE}"
-    echo "Fixed, but with a script that stays after it runs:"; run CinnamonPanel "$PROPS" script-stays "${FIXED/ScriptRemovesItself=TRUE/ScriptRemovesItself=FALSE}"
-    echo "Fixed, but without the lock between the script and Kairos:"; run CinnamonPanel "$PROPS" no-lock "${FIXED/ScriptLocked=TRUE/ScriptLocked=FALSE}"
+    echo "With a script that stays after it runs:"; run CinnamonPanel "$PROPS" script-stays "${FIXED/ScriptRemovesItself=TRUE/ScriptRemovesItself=FALSE}"
+    echo "Without the lock between the script and Kairos:"; run CinnamonPanel "$PROPS" no-lock "${FIXED/ScriptLocked=TRUE/ScriptLocked=FALSE}"
   fi
 fi
 exit $status
