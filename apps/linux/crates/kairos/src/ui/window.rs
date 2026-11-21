@@ -5,6 +5,7 @@
 use super::pages;
 use super::widgets::*;
 use crate::model::{change, Model, Page, State};
+use crate::platform::system::{autostart, bridge_installer};
 use gtk::glib;
 use gtk::prelude::*;
 use std::cell::{Cell, RefCell};
@@ -20,7 +21,23 @@ pub struct MainWindow {
     tickers: RefCell<Tickers>,
     shown: Cell<Option<Page>>,
     dirty: Cell<bool>,
+    /// What the shown page read from outside Kairos, to tell on activation whether it is stale.
+    outside: RefCell<Option<Outside>>,
     onboarding: RefCell<Option<gtk::Window>>,
+}
+
+/// Things the pages show that can change outside Kairos: start at login and the browsers the
+/// bridge is installed for.
+#[derive(PartialEq)]
+struct Outside {
+    open_at_login: bool,
+    browsers: Vec<String>,
+}
+
+impl Outside {
+    fn read() -> Self {
+        Outside { open_at_login: autostart::enabled(), browsers: bridge_installer::installed_browsers() }
+    }
 }
 
 impl MainWindow {
@@ -60,6 +77,7 @@ impl MainWindow {
             tickers: RefCell::new(vec![]),
             shown: Cell::new(None),
             dirty: Cell::new(true),
+            outside: RefCell::new(None),
             onboarding: RefCell::new(None),
         });
         {
@@ -97,9 +115,14 @@ impl MainWindow {
             me.window.connect_is_active_notify(move |w| {
                 if let Some(me) = weak.upgrade() {
                     if w.is_active() {
-                        // Things that change outside Kairos: start at login, browsers.
-                        me.dirty.set(true);
-                        me.rebuild();
+                        // Things that change outside Kairos: start at login, browsers. Rebuild only
+                        // when one did: a rebuild replaces every widget, so rebuilding on every
+                        // activation closed a drop-down's list as the click that opened it
+                        // activated the window.
+                        if me.outside.borrow().as_ref() != Some(&Outside::read()) {
+                            me.dirty.set(true);
+                            me.rebuild();
+                        }
                         me.model.schedule_reminders();
                     }
                 }
@@ -150,6 +173,7 @@ impl MainWindow {
             return; // rebuilt when the field loses focus
         }
         self.dirty.set(false);
+        *self.outside.borrow_mut() = Some(Outside::read());
         let idx = Page::ALL.iter().position(|p| *p == page).unwrap_or(0) as i32;
         if self.sidebar.selected_row().map(|r| r.index()) != Some(idx) {
             if let Some(row) = self.sidebar.row_at_index(idx) {

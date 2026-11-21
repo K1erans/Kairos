@@ -32,11 +32,8 @@ fn main() -> glib::ExitCode {
         return glib::ExitCode::SUCCESS;
     }
     // One Kairos at a time: a second launch asks the first to show its window.
-    let socket = kairos_core::bridge::socket_path();
-    if kairos_core::bridge::is_listening(&socket) {
-        if let Ok(mut s) = std::os::unix::net::UnixStream::connect(&socket) {
-            let _ = s.write_all(b"{\"type\":\"app.show\"}\n");
-        }
+    if !take_instance_lock() {
+        show_running_instance();
         return glib::ExitCode::SUCCESS;
     }
     // Kairos draws simple widgets; GTK's cairo renderer uses about a third less memory than GL.
@@ -60,6 +57,39 @@ fn main() -> glib::ExitCode {
         start(app);
     });
     app.run_with_args::<&str>(&[])
+}
+
+/// Takes the lock that marks this as the one running Kairos for its data folder, and holds it
+/// until the process ends (the system releases it on a crash too). The bridge socket alone was
+/// not enough: it is bound well into startup, so launches close together all saw no socket and
+/// all started. False when another Kairos holds the lock.
+fn take_instance_lock() -> bool {
+    let dir = kairos_core::store::default_directory();
+    let _ = std::fs::create_dir_all(&dir);
+    let Ok(file) = std::fs::OpenOptions::new().create(true).truncate(false).write(true).open(dir.join("kairos.lock")) else {
+        return true; // Can't make a lock file: run rather than refuse to start.
+    };
+    match file.try_lock() {
+        Ok(()) => {
+            std::mem::forget(file); // Held for the life of the process.
+            true
+        }
+        Err(std::fs::TryLockError::WouldBlock) => false,
+        Err(_) => true,
+    }
+}
+
+/// Asks the running Kairos to show its window. It may still be starting and not yet listening,
+/// so this waits a few seconds for its socket.
+fn show_running_instance() {
+    let socket = kairos_core::bridge::socket_path();
+    for _ in 0..50 {
+        if let Ok(mut s) = std::os::unix::net::UnixStream::connect(&socket) {
+            let _ = s.write_all(b"{\"type\":\"app.show\"}\n");
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
 }
 
 struct App {
