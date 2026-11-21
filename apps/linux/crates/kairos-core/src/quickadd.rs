@@ -3,7 +3,7 @@
 use crate::id::Id;
 use crate::models::{TaskItem, TaskStatus};
 use crate::time::Date;
-use chrono::{Datelike, Duration, Local, NaiveDate, TimeZone, Utc};
+use chrono::{Datelike, Duration, Local, LocalResult, NaiveDate, NaiveDateTime, TimeZone, Utc};
 
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct ParsedTask {
@@ -70,7 +70,7 @@ pub fn parse(input: &str, groups: &[String], now: Date) -> ParsedTask {
     if day.is_some() || time.is_some() {
         let base = day.unwrap_or(today);
         let (h, m) = time.unwrap_or((17, 0));
-        let local = |d: NaiveDate| d.and_hms_opt(h, m, 0).and_then(|n| Local.from_local_datetime(&n).earliest()).map(|l| l.with_timezone(&Utc));
+        let local = |d: NaiveDate| d.and_hms_opt(h, m, 0).and_then(|n| resolve_local(&Local, n));
         let mut due = local(base);
         // A bare time already past today means tomorrow.
         if day.is_none() {
@@ -83,6 +83,20 @@ pub fn parse(input: &str, groups: &[String], now: Date) -> ParsedTask {
         result.due = due;
     }
     result
+}
+
+/// A local wall-clock time as an instant. An ambiguous time (the clocks going back) is the
+/// earlier one. A time the clocks skip (going forward) is the first valid time after the gap,
+/// so "1:30am" on the night British clocks go from 1:00 to 2:00 is 2:00.
+pub fn resolve_local<Tz: TimeZone>(tz: &Tz, naive: NaiveDateTime) -> Option<Date> {
+    // Gaps are whole minutes and at most a day long.
+    (0..=24 * 60).find_map(|m| match tz.from_local_datetime(&(naive + Duration::minutes(m))) {
+        LocalResult::Single(t) => Some(t.with_timezone(&Utc)),
+        // chrono's `earliest()` gives the first offset it lists, which is not always the earlier
+        // instant (with TZ=Europe/London it is the later one).
+        LocalResult::Ambiguous(a, b) => Some(a.with_timezone(&Utc).min(b.with_timezone(&Utc))),
+        LocalResult::None => None,
+    })
 }
 
 fn read(input: &str, groups: &[String], today: NaiveDate) -> Vec<Piece> {
@@ -134,7 +148,8 @@ fn next_weekday(weekday: usize, today: NaiveDate) -> NaiveDate {
     today + Duration::days(delta)
 }
 
-/// "45m", "45min", "2h", "2hrs", "1h30m", "1h30", "90" -> minutes
+/// "45m", "45min", "2h", "2hrs", "1h30m", "1h30", "90" -> minutes. None for anything that does
+/// not fit an `i32`.
 pub fn minutes(s: &str) -> Option<i32> {
     if let Ok(n) = s.parse::<i32>() {
         return if n > 0 { Some(n) } else { None };
@@ -152,7 +167,7 @@ pub fn minutes(s: &str) -> Option<i32> {
         let after = &rest[n..];
         let hour_unit = ["hours", "hour", "hrs", "hr", "h"].iter().find(|u| after.starts_with(*u));
         if let Some(u) = hour_unit {
-            total += d.parse::<i64>().ok()? * 60;
+            total = total.checked_add(d.parse::<i64>().ok()?.checked_mul(60)?)?;
             rest = &after[u.len()..];
         }
     }
@@ -161,7 +176,7 @@ pub fn minutes(s: &str) -> Option<i32> {
         let after = &rest[n..];
         let min_unit = ["minutes", "minute", "mins", "min", "m"].iter().find(|u| after == **u);
         if after.is_empty() || min_unit.is_some() {
-            total += d.parse::<i64>().ok()?;
+            total = total.checked_add(d.parse::<i64>().ok()?)?;
             rest = "";
         } else {
             return None;
@@ -171,7 +186,7 @@ pub fn minutes(s: &str) -> Option<i32> {
         return None;
     }
     if total > 0 {
-        Some(total as i32)
+        i32::try_from(total).ok()
     } else {
         None
     }

@@ -111,3 +111,17 @@ fn smart_next_prefers_due_then_priority() {
     assert_eq!(suggest(&tasks, Some(g), None, Some(30)).map(|t| t.title), Some("b".into()));
     assert_eq!(suggest(&[a], Some(Id::new()), None, None), None);
 }
+
+#[test]
+fn an_estimate_too_big_for_minutes_is_ignored() {
+    use kairos_core::quickadd::minutes;
+    assert_eq!(minutes("3000000000m"), None, "used to wrap to a negative number");
+    assert_eq!(minutes("3000000000"), None);
+    assert_eq!(minutes("999999999999999999h"), None, "used to overflow and panic");
+    assert_eq!(minutes("99999999999999999999h"), None);
+    assert_eq!(minutes("35791394h8m"), None, "past i32::MAX by one minute");
+    assert_eq!(minutes("35791394h7m"), Some(i32::MAX));
+    let p = parse("write report ~3000000000m", &groups(), now());
+    assert_eq!(p.estimate_min, None);
+    assert_eq!(p.title, "write report ~3000000000m", "the word stays in the title, as other words that aren't tokens do");
+}

@@ -1,6 +1,6 @@
 //! The main window: a sidebar of pages and the page itself. Pages are rebuilt from the model
-//! when what they show changes, except while the owner is typing in one, so a block logged by
-//! the browser never eats a half-typed task. Timer readouts update every second in place.
+//! when what they show changes, except while the owner is typing in one or dragging a slider,
+//! so a block logged by the browser never eats a half-typed task. Timer readouts update every second in place.
 
 use super::pages;
 use super::widgets::*;
@@ -158,9 +158,15 @@ impl MainWindow {
         }
     }
 
+    /// A text field or slider on the page has focus. A slider takes focus when pressed and
+    /// changes the data on every step of a drag, so rebuilding under it would end the drag.
     fn typing(&self) -> bool {
         let Some(focus) = gtk::prelude::GtkWindowExt::focus(&self.window) else { return false };
-        let editable = focus.is::<gtk::Text>() || focus.is::<gtk::TextView>() || focus.is::<gtk::Entry>() || focus.is::<gtk::SpinButton>();
+        let editable = focus.is::<gtk::Text>()
+            || focus.is::<gtk::TextView>()
+            || focus.is::<gtk::Entry>()
+            || focus.is::<gtk::SpinButton>()
+            || focus.is::<gtk::Range>();
         editable && focus.is_ancestor(&self.content)
     }
 

@@ -2,11 +2,40 @@ use crate::models::AppData;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 /// Loads and saves `AppData` as one JSON file. Saves are atomic.
+///
+/// When `load` could not read the file (anything but "no file yet"), or could not keep a copy
+/// of a file it could not decode, the store becomes read-only: `save` refuses, so the starter
+/// data `load` handed back never overwrites the owner's real file. `problem()` says why.
 pub struct DataStore {
     pub path: PathBuf,
+    problem: Mutex<Option<String>>,
 }
+
+/// Why `DataStore::try_load` could not hand back the saved data.
+#[derive(Debug)]
+pub enum LoadError {
+    /// The file exists but could not be read (permissions, I/O error, a folder in its place).
+    Unreadable(std::io::Error),
+    /// The file could not be decoded, and the copy kept beside it could not be written.
+    BackupFailed(std::io::Error),
+}
+
+impl std::fmt::Display for LoadError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            LoadError::Unreadable(e) => write!(f, "Kairos couldn\u{2019}t read its data file ({e}), so it won\u{2019}t save over it."),
+            LoadError::BackupFailed(e) => write!(
+                f,
+                "Kairos couldn\u{2019}t read its data file and couldn\u{2019}t keep a copy of it ({e}), so it won\u{2019}t save over it."
+            ),
+        }
+    }
+}
+
+impl std::error::Error for LoadError {}
 
 /// `KAIROS_HOME` points the app and the native host at another folder (used for testing).
 pub fn default_directory() -> PathBuf {
@@ -63,7 +92,7 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
 
 impl DataStore {
     pub fn new(path: PathBuf) -> Self {
-        DataStore { path }
+        DataStore { path, problem: Mutex::new(None) }
     }
 
     pub fn standard() -> Self {
@@ -71,21 +100,70 @@ impl DataStore {
     }
 
     /// Returns starter data when no file exists. A file that fails to decode is kept beside the
-    /// store as `kairos.corrupt-<time>.json` rather than overwritten.
+    /// store as `kairos.corrupt-<time>.json`, and starter data is returned. Any other failure
+    /// (the file can't be read, or the copy can't be written) also returns starter data, but
+    /// leaves the store read-only so later saves don't overwrite the file; see `problem()`.
     pub fn load(&self, starter: impl FnOnce() -> AppData) -> AppData {
-        let Ok(raw) = fs::read(&self.path) else { return starter() };
-        match serde_json::from_slice::<AppData>(&raw) {
+        let mut starter = Some(starter);
+        match self.try_load(|| (starter.take().unwrap())()) {
             Ok(d) => d,
+            Err(_) => starter.take().map(|f| f()).unwrap_or_default(),
+        }
+    }
+
+    /// As `load`, but says when the saved data could not be loaded. On `Err` the store is
+    /// read-only.
+    pub fn try_load(&self, starter: impl FnOnce() -> AppData) -> Result<AppData, LoadError> {
+        let raw = match fs::read(&self.path) {
+            Ok(raw) => raw,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(starter()),
+            Err(e) => {
+                let err = LoadError::Unreadable(e);
+                self.set_problem(err.to_string());
+                return Err(err);
+            }
+        };
+        match serde_json::from_slice::<AppData>(&raw) {
+            Ok(d) => Ok(d),
             Err(_) => {
                 let stamp = chrono::Utc::now().timestamp();
                 let backup = self.path.with_file_name(format!("kairos.corrupt-{stamp}.json"));
-                let _ = fs::write(backup, &raw);
-                starter()
+                match write_atomic(&backup, &raw) {
+                    Ok(()) => Ok(starter()),
+                    Err(e) => {
+                        let err = LoadError::BackupFailed(e);
+                        self.set_problem(err.to_string());
+                        Err(err)
+                    }
+                }
             }
         }
     }
 
+    fn set_problem(&self, message: String) {
+        *self.problem.lock().unwrap_or_else(|p| p.into_inner()) = Some(message);
+    }
+
+    /// Why the store is read-only, or None when saves go through.
+    pub fn problem(&self) -> Option<String> {
+        self.problem.lock().unwrap_or_else(|p| p.into_inner()).clone()
+    }
+
+    pub fn is_read_only(&self) -> bool {
+        self.problem().is_some()
+    }
+
+    /// Lets saves overwrite the file again, for when the owner chooses to replace it (for
+    /// example by importing a file, or starting fresh, after being shown `problem()`).
+    pub fn allow_overwrite(&self) {
+        *self.problem.lock().unwrap_or_else(|p| p.into_inner()) = None;
+    }
+
+    /// Refuses with `PermissionDenied` while the store is read-only (see `load`).
     pub fn save(&self, data: &AppData) -> std::io::Result<()> {
+        if let Some(problem) = self.problem() {
+            return Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, problem));
+        }
         write_atomic(&self.path, &encode(data))
     }
 }

@@ -11,6 +11,7 @@ use std::rc::Rc;
 pub fn show(app: &gtk::Application, model: &Rc<Model>) {
     if let Some(w) = app.windows().into_iter().find(|w| w.widget_name() == "kairos-quickadd") {
         w.present();
+        bring_to_front(model.x.as_ref(), &w);
         return;
     }
     let win = gtk::Window::builder().application(app).decorated(false).resizable(false).default_width(620).title("Quick add").build();
@@ -100,5 +101,7 @@ pub fn show(app: &gtk::Application, model: &Rc<Model>) {
         });
     }
     win.present();
+    // Opened from a global shortcut, so it needs activating to get the keyboard.
+    bring_to_front(model.x.as_ref(), &win);
     entry.grab_focus();
 }

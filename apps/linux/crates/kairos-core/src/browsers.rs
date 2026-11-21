@@ -18,6 +18,24 @@ pub const CHROMIUM: &[&str] = &[
     "org.chromium.Chromium.desktop",
     "com.microsoft.Edge.desktop",
     "com.vivaldi.Vivaldi.desktop",
+    // Release channels, snaps and flatpaks.
+    "chromium_chromium.desktop",
+    "brave-browser-beta.desktop",
+    "brave-browser-nightly.desktop",
+    "microsoft-edge-dev.desktop",
+    "vivaldi-snapshot.desktop",
+    "opera-beta.desktop",
+    "opera-developer.desktop",
+    "com.opera.Opera.desktop",
+    "io.github.ungoogled_software.ungoogled_chromium.desktop",
+    "com.google.ChromeDev.desktop",
+    "com.github.Eloston.UngoogledChromium.desktop",
+    "brave_brave.desktop",
+    "ru.yandex.Browser.desktop",
+    "yandex-browser.desktop",
+    "thorium-browser.desktop",
+    "helium.desktop",
+    "net.imput.helium.desktop",
 ];
 
 pub const OTHER: &[&str] = &[
@@ -38,6 +56,14 @@ pub const OTHER: &[&str] = &[
     "org.kde.falkon.desktop",
     "falkon.desktop",
     "midori.desktop",
+    "firefox-developer-edition.desktop",
+    "firefox-nightly.desktop",
+    "com.github.micahflee.torbrowser-launcher.desktop",
+    "org.gnome.Epiphany.Devel.desktop",
+    "one.ablaze.floorp.desktop",
+    "floorp.desktop",
+    "org.qutebrowser.qutebrowser.desktop",
+    "qutebrowser.desktop",
 ];
 
 pub fn is_chromium(app: &str) -> bool {

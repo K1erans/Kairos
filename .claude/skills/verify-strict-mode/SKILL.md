@@ -87,7 +87,7 @@ Last confirmed in sync: 2026-11-10, at commit 12c70d3 "Detect full screen from t
 - It checks the model, not the Swift. `anchors.tsv` catches a mirrored line changing; it cannot catch new code that changes the mode some other way. That is what the `NOTE` is for.
 - Bounds: `Max = 3` overrides. Short and long breaks are one phase. Grant expiry is "at some point", not five minutes.
 - Quit and relaunch: a paused strict phase resumes running at launch, with its saved end (the time it would have ended if resumed at the last save); the model treats paused and running alike there.
-- Rules are one bit per step: an edit or a switch is looser or it is not. Which edits count as looser is `RuleLock.loosens`, tested in `RuleLockTests`. The privacy list "Never send off this Mac" (Settings) also stops Jev from checking a site; it is a privacy setting and stays editable in Strict.
+- Rules are one bit per step: an edit or a switch is looser or it is not. Which edits count as looser is `RuleLock.loosens`, tested in `RuleLockTests`. The privacy list "Never send off this Mac" (Settings) also stops Jev from checking a site; on the Mac it is a privacy setting and stays editable in Strict. In Kairos for Linux, Settings changes go through `AppData::update_settings`, which refuses `rule_lock::settings_loosen` changes while locked: adding to that list, and turning off "Block browsers that Kairos Shield is not running in" or Jev's fail-closed switch. These are modelled as `EditRules`, as is pinning an app to the active group's Kairos Bar (Jev trusts those apps), which goes through `Model::update_group`.
 - Hiding apps on a group switch (`SwitchBehavior`, `GroupSwitch.plan`) is left out. Returning to a group un-hides the apps hidden when it was left; an app that group blocks is hidden again by the app guard's sweep, which is not modelled.
 - Left out: the Chrome extensions' own handling of the pushed state (they keep enforcing until `strictUntil` while Kairos is closed), app blocking and Jev, and the reason text on an override.
 
@@ -102,7 +102,7 @@ How the model maps to the Rust:
 | `Override`, `LedgerRefusesStrict`, `LedgerChecksMax` | `OverrideLedger::request` in `kairos-core/src/rules.rs`, called from `Model::request_override` |
 | `Ledger`, `ResetsOnEnterStrict` | `Model::mode_changed` (runs from `data_changed` on every mode change) and `TempoEvent::Started(Focus)` in `Model::apply` |
 | `Synced`, `SyncsModeFromTimer` | `Model::sync_focus_from_tempo` |
-| `SetMode`, `PickerLockedByTimer` | `Model::set_mode`, from `mode_picker` on Today (`b.set_sensitive(idle)`) and the tray's Mode submenu (`enabled: !s.mode_locked`) |
+| `SetMode`, `PickerLockedByTimer` | `Model::set_mode`, which returns early unless the timer is idle, from `mode_picker` on Today (`b.set_sensitive(idle)`) and the tray's Mode submenu (`enabled: !s.mode_locked`) |
 | `StartFocus` | `Model::start_focus` (after `request_start_focus` asks, and rechecks idle) |
 | `Skip`, `Stop`, `LocksStrictControls` | `Model::skip_phase` and `stop_timer` return early while `strict_locked()`; Skip and Stop are insensitive on Today and in the tray |
 | `TimeUp`, `LongSleep`, `BreakOver` | `Model::tick` -> `TempoEngine::tick` / `advance`; `Stopped` and `AwaitingFocus` turn the mode off in `apply` |
@@ -118,7 +118,7 @@ Result on 2026-11-21: the same as the Mac. Six properties hold, every mutant fai
 
 Linux-only things the model does not show:
 
-- `set_mode` does not check the timer itself; only the views lock the Mode picker, as on the Mac. Unlike Skip, Stop and Quit, which recheck `strict_locked()` when the press arrives, a Mode press that arrives from a stale view goes through. Two views can be stale: the tray menu is a snapshot sent over D-Bus and its command arrives later through a channel (`TrayCommand::SetMode(mode) => m.set_mode(mode)`), and `MainWindow::rebuild` skips the rebuild while a text field on the page has focus. Neither was shown to happen; a `phase != Idle` early return in `set_mode` would close it (`make_current` only calls it when the mode is off, so idle).
+- Since 2026-11-21 `set_mode` refuses a change unless the timer is idle, as the views do, so a Mode press from a stale view (the tray menu is a snapshot sent over D-Bus and its command arrives later, `TrayCommand::SetMode(mode) => m.set_mode(mode)`; `MainWindow::rebuild` skips the rebuild while a text field or slider has focus) cannot take a strict phase out of Strict. On the Mac only the views lock the picker.
 - Only one Kairos should run per data folder; two would keep two ledgers and two timers. The model assumes one.
 
 Last confirmed in sync: 2026-11-21, at commit 86767ee "Add Kairos for Linux Mint, a Rust and GTK 4 port of Kairos Desktop", plus uncommitted edits by other work in `main.rs` (a single-instance lock) and `ui/window.rs` (rebuild on activation only when something outside Kairos changed); neither changes the mode, timer, overrides or rules. Recorded in `verification/strict-mode/synced-linux.sha256`.

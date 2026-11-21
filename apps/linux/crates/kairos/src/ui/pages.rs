@@ -322,7 +322,7 @@ fn setup_row(model: &Rc<Model>, item: &SetupItem) -> gtk::Box {
             sw.connect_active_notify(move |s| {
                 let on = s.is_active();
                 let m = m.clone();
-                glib::idle_add_local_once(move || m.edit(|d| d.settings.set_replaces_system_dock(on)));
+                glib::idle_add_local_once(move || m.update_settings(|st| st.set_replaces_system_dock(on)));
             });
             Some(sw.upcast())
         }
@@ -339,6 +339,8 @@ fn setup_row(model: &Rc<Model>, item: &SetupItem) -> gtk::Box {
 #[derive(Default)]
 struct TasksUi {
     group: Option<Id>,
+    /// "No group": tasks whose group was deleted, or that were never given one.
+    ungrouped: bool,
     selected: Option<Id>,
     show_done: bool,
 }
@@ -349,13 +351,16 @@ thread_local! {
 
 fn tasks(model: &Rc<Model>) -> gtk::Widget {
     let paned = gtk::Paned::new(gtk::Orientation::Horizontal);
-    let (group, selected, show_done) = TASKS_UI.with(|u| {
+    let any_ungrouped = model.s().data.tasks.iter().any(|t| t.group_id.is_none() && t.parent_id.is_none());
+    let (group, ungrouped, selected, show_done) = TASKS_UI.with(|u| {
         let mut u = u.borrow_mut();
         if u.group.is_none() || model.s().data.group(u.group).is_none() {
             u.group = model.s().data.focus.active_group_id;
         }
-        (u.group, u.selected, u.show_done)
+        (u.group, u.ungrouped, u.selected, u.show_done)
     });
+    // The tasks listed: the chosen group's, or those with no group.
+    let listed = if ungrouped { None } else { group };
     let left = vbox(12);
     left.set_margin_top(16);
     left.set_margin_bottom(16);
@@ -363,13 +368,36 @@ fn tasks(model: &Rc<Model>) -> gtk::Widget {
     left.set_margin_end(16);
     left.set_size_request(380, -1);
     let head = hbox(8);
-    head.append(&group_picker(model, group, {
+    let picker = group_picker(model, listed, {
         let m = model.clone();
         move |id| {
-            TASKS_UI.with(|u| u.borrow_mut().group = Some(id));
+            TASKS_UI.with(|u| {
+                let mut u = u.borrow_mut();
+                u.group = Some(id);
+                u.ungrouped = false;
+            });
             m.emit(change::NAV);
         }
-    }));
+    });
+    if ungrouped || any_ungrouped {
+        let t = gtk::ToggleButton::with_label("No group");
+        t.set_tooltip_text(Some("Tasks with no group, such as those of a deleted group"));
+        t.set_active(ungrouped);
+        let m = model.clone();
+        t.connect_clicked(move |t| {
+            if t.is_active() {
+                let m = m.clone();
+                glib::idle_add_local_once(move || {
+                    TASKS_UI.with(|u| u.borrow_mut().ungrouped = true);
+                    m.emit(change::NAV);
+                });
+            } else {
+                t.set_active(true);
+            }
+        });
+        picker.append(&t);
+    }
+    head.append(&picker);
     head.append(&spacer());
     let done_toggle = gtk::CheckButton::with_label("Show done");
     done_toggle.set_active(show_done);
@@ -389,7 +417,7 @@ fn tasks(model: &Rc<Model>) -> gtk::Widget {
     list.add_css_class("boxed-list");
     list.set_selection_mode(gtk::SelectionMode::Single);
     let mut ids = vec![];
-    let todo = model.s().tasks_in(group, false);
+    let todo = model.s().tasks_in(listed, false);
     for t in &todo {
         let row = gtk::ListBoxRow::new();
         let r = task_row(model, t, false);
@@ -400,7 +428,7 @@ fn tasks(model: &Rc<Model>) -> gtk::Widget {
         ids.push(t.id);
     }
     if show_done {
-        let done = model.s().tasks_in(group, true);
+        let done = model.s().tasks_in(listed, true);
         if !done.is_empty() {
             let row = gtk::ListBoxRow::new();
             row.set_selectable(false);
@@ -472,15 +500,18 @@ fn task_detail(model: &Rc<Model>, task: &TaskItem) -> gtk::Widget {
         e.set_hexpand(true);
         e
     }));
-    let groups: Vec<(Id, String)> = model.s().data.groups.iter().map(|g| (g.id, g.name.clone())).collect();
+    // "No group" first, then the groups.
+    let groups: Vec<(Option<Id>, String)> =
+        std::iter::once((None, "No group".to_string())).chain(model.s().data.groups.iter().map(|g| (Some(g.id), g.name.clone()))).collect();
     let names: Vec<String> = groups.iter().map(|g| g.1.clone()).collect();
-    let current = task.group_id.and_then(|g| groups.iter().position(|x| x.0 == g)).unwrap_or(0);
+    let current = groups.iter().position(|x| x.0 == task.group_id).unwrap_or(0);
     {
         let m = model.clone();
-        let ids: Vec<Id> = groups.iter().map(|g| g.0).collect();
+        let ids: Vec<Option<Id>> = groups.iter().map(|g| g.0).collect();
         b.append(&labeled("Group", &dropdown(&names, current, move |i| {
             if let Some(g) = ids.get(i).copied() {
-                m.update_task(id, |t| t.group_id = Some(g));
+                let m = m.clone();
+                glib::idle_add_local_once(move || m.update_task(id, |t| t.group_id = g));
             }
         })));
     }
@@ -779,7 +810,9 @@ fn group_detail(model: &Rc<Model>, g: &AppGroup) -> gtk::Widget {
     let desktops: Vec<String> = std::iter::once("Don't switch".to_string()).chain((1..=9).map(|n| format!("Workspace {n}"))).collect();
     {
         let m = model.clone();
-        form.append(&labeled("Switch to workspace", &dropdown(&desktops, g.desktop.clamp(0, 9) as usize, move |i| m.update_group(id, |g| g.desktop = i as i32))));
+        form.append(&labeled("Switch to workspace", &dropdown(&desktops, g.desktop.clamp(0, 9) as usize, move |i| {
+            m.update_group(id, |g| g.desktop = i as i32);
+        })));
     }
     if g.desktop > 0 {
         form.append(&caption(&format!("Switching to {} also moves to workspace {}. Add workspaces in System Settings > Workspaces if there are fewer.", g.name, g.desktop)));
@@ -849,7 +882,7 @@ fn group_detail(model: &Rc<Model>, g: &AppGroup) -> gtk::Widget {
     {
         let m = model.clone();
         b.append(&app_list(model, "Apps in Kairos Bar", "No apps yet. Add some, or drag an app onto Kairos Bar.", &g.dock_apps, true, true, move |next| {
-            m.update_group(id, |g| g.dock_apps = next)
+            m.set_group_apps(id, next, |g| &mut g.dock_apps)
         }));
     }
     b.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
@@ -890,26 +923,25 @@ fn rules_page(model: &Rc<Model>) -> gtk::Widget {
     b.set_hexpand(true);
     b.append(&styled(&format!("These apply while {} is the active group and the mode is Focus or Strict.", g.name), "kairos-dim"));
     if let Some(l) = &lock {
-        let row = hbox(8);
-        let icon = gtk::Image::from_icon_name("changes-prevent-symbolic");
-        icon.add_css_class("kairos-lock");
-        row.append(&icon);
-        row.append(&styled(l, "kairos-lock"));
-        b.append(&row);
+        b.append(&lock_note(l));
     }
     {
         let m = model.clone();
         b.append(&app_list(model, "Blocked apps", "No apps blocked. Add other browsers here to stop site rules being bypassed.", &g.blocked_apps, false, !locked, move |next| {
-            m.update_group(id, |g| g.blocked_apps = next)
+            m.set_group_apps(id, next, |g| &mut g.blocked_apps)
         }));
     }
     {
         let m = model.clone();
-        b.append(&string_list("Blocked sites", "example.com", &g.block_sites, normalize_site, true, !locked, move |next| m.update_group(id, |g| g.block_sites = next)));
+        b.append(&string_list("Blocked sites", "example.com", &g.block_sites, normalize_site, true, !locked, move |next| {
+            m.update_group(id, |g| g.block_sites = next);
+        }));
     }
     {
         let m = model.clone();
-        b.append(&string_list("Always allowed sites", "docs.google.com", &g.allow_sites, normalize_site, !locked, true, move |next| m.update_group(id, |g| g.allow_sites = next)));
+        b.append(&string_list("Always allowed sites", "docs.google.com", &g.allow_sites, normalize_site, !locked, true, move |next| {
+            m.update_group(id, |g| g.allow_sites = next);
+        }));
     }
     // Hidden page elements.
     let hidden = vbox(6);
@@ -945,7 +977,9 @@ fn rules_page(model: &Rc<Model>) -> gtk::Widget {
         let m = model.clone();
         jev.append(&switch_row("Ask Jev about sites and apps that are on no list", None, g.jev_enabled, !(locked && g.jev_enabled), move |on| {
             let m = m.clone();
-            glib::idle_add_local_once(move || m.update_group(id, |g| g.jev_enabled = on));
+            glib::idle_add_local_once(move || {
+                m.update_group(id, |g| g.jev_enabled = on);
+            });
         }));
     }
     let row = hbox(8);
@@ -958,6 +992,10 @@ fn rules_page(model: &Rc<Model>) -> gtk::Widget {
     {
         let (m, value) = (model.clone(), value.clone());
         scale.connect_value_changed(move |s| {
+            // Focus keeps the page from being rebuilt under the slider mid-drag (window.rs typing()).
+            if !s.has_focus() {
+                s.grab_focus();
+            }
             let v = (s.value() * 20.0).round() / 20.0;
             value.set_text(&format!("{v:.2}"));
             m.update_group(id, |g| g.jev_threshold = v);
@@ -1139,14 +1177,14 @@ fn settings(model: &Rc<Model>) -> gtk::Widget {
             m.emit(change::KEYS);
         }
     }));
-    sec.append(&switch_row("Notify me when a task is due", None, st.notifies_when_due, true, setter(model, |d, on| d.settings.notifies_when_due = on)));
+    sec.append(&switch_row("Notify me when a task is due", None, st.notifies_when_due, true, setter(model, |st, on| st.notifies_when_due = on)));
     let behaviors: Vec<String> = SwitchBehavior::ALL.iter().map(|b| b.label().to_string()).collect();
     {
         let m = model.clone();
         let cur = SwitchBehavior::ALL.iter().position(|b| *b == st.switch_behavior).unwrap_or(0);
         sec.append(&labeled("When switching group", &dropdown(&behaviors, cur, move |i| {
             let m = m.clone();
-            glib::idle_add_local_once(move || m.edit(|d| d.settings.switch_behavior = SwitchBehavior::ALL[i]));
+            glib::idle_add_local_once(move || m.update_settings(|st| st.switch_behavior = SwitchBehavior::ALL[i]));
         })));
     }
     match st.switch_behavior {
@@ -1155,14 +1193,14 @@ fn settings(model: &Rc<Model>) -> gtk::Widget {
         SwitchBehavior::Leave => {}
     }
     sec.append(&caption("A group can choose differently under Groups > Other apps."));
-    sec.append(&hotkey_picker(model, "Quick add", hotkeys::QUICK_ADD, &st.quick_add_hotkey, |d, v| d.settings.quick_add_hotkey = v));
-    sec.append(&hotkey_picker(model, "Start or pause the timer", hotkeys::TIMER, &st.timer_hotkey, |d, v| d.settings.timer_hotkey = v));
+    sec.append(&hotkey_picker(model, "Quick add", hotkeys::QUICK_ADD, &st.quick_add_hotkey, |st, v| st.quick_add_hotkey = v));
+    sec.append(&hotkey_picker(model, "Start or pause the timer", hotkeys::TIMER, &st.timer_hotkey, |st, v| st.timer_hotkey = v));
     sec.append(&switch_row(
         "Ctrl+1 to Ctrl+9 switch groups",
         Some("Cinnamon can use these to switch workspaces. While this is on, Kairos takes them."),
         st.group_hotkeys,
         true,
-        setter(model, |d, on| d.settings.group_hotkeys = on),
+        setter(model, |st, on| st.group_hotkeys = on),
     ));
     if let Some(f) = HotkeyPlan::failure_text(&s.hotkey_failures) {
         sec.append(&styled(&format!("\u{26A0} {f}"), "kairos-warning-text"));
@@ -1171,14 +1209,14 @@ fn settings(model: &Rc<Model>) -> gtk::Widget {
 
     // Kairos Bar
     let (outer, sec) = section("Kairos Bar");
-    sec.append(&switch_row("Show Kairos Bar", None, st.dock_visible, true, setter(model, |d, on| d.settings.dock_visible = on)));
+    sec.append(&switch_row("Show Kairos Bar", None, st.dock_visible, true, setter(model, |st, on| st.dock_visible = on)));
     {
         let m = model.clone();
         let edges: Vec<String> = DockEdge::ALL.iter().map(|e| e.label().to_string()).collect();
         let cur = DockEdge::ALL.iter().position(|e| *e == st.dock_edge).unwrap_or(0);
         sec.append(&labeled("Screen edge", &dropdown(&edges, cur, move |i| {
             let m = m.clone();
-            glib::idle_add_local_once(move || m.edit(|d| d.settings.dock_edge = DockEdge::ALL[i]));
+            glib::idle_add_local_once(move || m.update_settings(|st| st.dock_edge = DockEdge::ALL[i]));
         })));
     }
     {
@@ -1187,7 +1225,7 @@ fn settings(model: &Rc<Model>) -> gtk::Widget {
         let cur = BarAppearance::ALL.iter().position(|e| *e == st.bar_appearance).unwrap_or(0);
         sec.append(&labeled("Appearance", &dropdown(&looks, cur, move |i| {
             let m = m.clone();
-            glib::idle_add_local_once(move || m.edit(|d| d.settings.bar_appearance = BarAppearance::ALL[i]));
+            glib::idle_add_local_once(move || m.update_settings(|st| st.bar_appearance = BarAppearance::ALL[i]));
         })));
     }
     {
@@ -1202,17 +1240,21 @@ fn settings(model: &Rc<Model>) -> gtk::Widget {
         scale.set_draw_value(false);
         let m = model.clone();
         scale.connect_value_changed(move |sc| {
+            // Focus keeps the page from being rebuilt under the slider mid-drag (window.rs typing()).
+            if !sc.has_focus() {
+                sc.grab_focus();
+            }
             let v = (sc.value() / 2.0).round() * 2.0;
             l.set_text(&format!("Icon size: {}", v as i64));
             if v != m.s().data.settings.icon_size {
-                m.edit(|d| d.settings.icon_size = v);
+                m.update_settings(|st| st.icon_size = v);
             }
         });
         row.append(&scale);
         sec.append(&row);
         sec.append(&caption("You can also drag the divider on Kairos Bar itself."));
     }
-    sec.append(&switch_row("Automatically hide and show Kairos Bar", None, st.auto_hide_bar, true, setter(model, |d, on| d.settings.auto_hide_bar = on)));
+    sec.append(&switch_row("Automatically hide and show Kairos Bar", None, st.auto_hide_bar, true, setter(model, |st, on| st.auto_hide_bar = on)));
     sec.append(&switch_row(
         "Hide Kairos Bar in full-screen apps",
         Some(if st.auto_hide_bar {
@@ -1222,7 +1264,7 @@ fn settings(model: &Rc<Model>) -> gtk::Widget {
         }),
         st.auto_hide_bar || st.hides_in_full_screen,
         !st.auto_hide_bar,
-        setter(model, |d, on| d.settings.hides_in_full_screen = on),
+        setter(model, |st, on| st.hides_in_full_screen = on),
     ));
     sec.append(&switch_row(
         "Keep windows clear of Kairos Bar",
@@ -1233,15 +1275,15 @@ fn settings(model: &Rc<Model>) -> gtk::Widget {
         }),
         st.keeps_windows_clear,
         true,
-        setter(model, |d, on| d.settings.keeps_windows_clear = on),
+        setter(model, |st, on| st.keeps_windows_clear = on),
     ));
-    sec.append(&switch_row("Show Downloads and Trash at the end of Kairos Bar", None, st.shows_dock_folders, true, setter(model, |d, on| d.settings.shows_dock_folders = on)));
+    sec.append(&switch_row("Show Downloads and Trash at the end of Kairos Bar", None, st.shows_dock_folders, true, setter(model, |st, on| st.shows_dock_folders = on)));
     sec.append(&switch_row(
         "Use Kairos Bar instead of Cinnamon\u{2019}s panel",
         Some("Kairos sets Cinnamon\u{2019}s panels to hide themselves and puts your panel settings back when you turn this off or quit. Turning this on also turns on \u{201C}Automatically hide and show Kairos Bar\u{201D}. If Kairos ever stops without putting the panel back, a small background helper does it within 30 seconds."),
         st.replaces_system_dock,
         true,
-        setter(model, |d, on| d.settings.set_replaces_system_dock(on)),
+        setter(model, |st, on| st.set_replaces_system_dock(on)),
     ));
     b.append(&outer);
 
@@ -1253,46 +1295,51 @@ fn settings(model: &Rc<Model>) -> gtk::Widget {
         n.set_size_request(90, -1);
         row.append(&n);
         let m1 = model.clone();
-        row.append(&labeled_spin("Focus", 5.0, 180.0, 5.0, p.focus_min as f64, move |v| m1.edit(|d| d.settings.presets[i].focus_min = v as i32)));
+        row.append(&labeled_spin("Focus", 5.0, 180.0, 5.0, p.focus_min as f64, move |v| m1.update_settings(|st| st.presets[i].focus_min = v as i32)));
         let m2 = model.clone();
-        row.append(&labeled_spin("Break", 1.0, 60.0, 1.0, p.short_break_min as f64, move |v| m2.edit(|d| d.settings.presets[i].short_break_min = v as i32)));
+        row.append(&labeled_spin("Break", 1.0, 60.0, 1.0, p.short_break_min as f64, move |v| m2.update_settings(|st| st.presets[i].short_break_min = v as i32)));
         let m3 = model.clone();
-        row.append(&labeled_spin("Long", 5.0, 90.0, 5.0, p.long_break_min as f64, move |v| m3.edit(|d| d.settings.presets[i].long_break_min = v as i32)));
+        row.append(&labeled_spin("Long", 5.0, 90.0, 5.0, p.long_break_min as f64, move |v| m3.update_settings(|st| st.presets[i].long_break_min = v as i32)));
         let strict = gtk::CheckButton::with_label("Strict");
         strict.set_active(p.strict);
         let m4 = model.clone();
         strict.connect_toggled(move |c| {
             let on = c.is_active();
-            m4.edit(|d| d.settings.presets[i].strict = on);
+            m4.update_settings(|st| st.presets[i].strict = on);
         });
         row.append(&strict);
         sec.append(&row);
     }
-    sec.append(&switch_row("Show a full-screen break reminder", None, st.break_overlay, true, setter(model, |d, on| d.settings.break_overlay = on)));
+    sec.append(&switch_row("Show a full-screen break reminder", None, st.break_overlay, true, setter(model, |st, on| st.break_overlay = on)));
     sec.append(&switch_row(
         "Start the next focus session automatically",
         Some("Off, the timer waits when a break ends and notifies you. Start the next session from Today, the tray icon or the timer shortcut."),
         st.starts_focus_after_break,
         true,
-        setter(model, |d, on| d.settings.starts_focus_after_break = on),
+        setter(model, |st, on| st.starts_focus_after_break = on),
     ));
     b.append(&outer);
 
-    // Blocking
+    // Blocking. During a locked strict phase these can be made stricter but not looser.
+    let lock = s.strict_locked().then(|| kairos_core::rules::rule_lock::note(s.data.focus.strict_until));
+    let locked = lock.is_some();
     let (outer, sec) = section("Blocking");
+    if let Some(l) = &lock {
+        sec.append(&lock_note(l));
+    }
     {
         let m = model.clone();
-        sec.append(&labeled("Overrides per session", &spin(0.0, 10.0, 1.0, st.max_overrides_per_session as f64, move |v| m.edit(|d| d.settings.max_overrides_per_session = v as i32))));
+        sec.append(&labeled("Overrides per session", &spin(0.0, 10.0, 1.0, st.max_overrides_per_session as f64, move |v| m.update_settings(|st| st.max_overrides_per_session = v as i32))));
         let m = model.clone();
-        sec.append(&labeled("Each override lasts (min)", &spin(1.0, 30.0, 1.0, st.override_minutes as f64, move |v| m.edit(|d| d.settings.override_minutes = v as i32))));
+        sec.append(&labeled("Each override lasts (min)", &spin(1.0, 30.0, 1.0, st.override_minutes as f64, move |v| m.update_settings(|st| st.override_minutes = v as i32))));
     }
-    sec.append(&switch_row("Block the page when Jev is slow or offline", None, st.jev_fail_closed, true, setter(model, |d, on| d.settings.jev_fail_closed = on)));
+    sec.append(&switch_row("Block the page when Jev is slow or offline", None, st.jev_fail_closed, !(locked && st.jev_fail_closed), setter(model, |st, on| st.jev_fail_closed = on)));
     sec.append(&switch_row(
         "Block browsers that Kairos Shield is not running in",
         Some("In Focus and Strict, Firefox and other browsers that can\u{2019}t run Kairos Shield are minimised, and so are Chromium browsers (Chrome, Brave, Edge, Vivaldi) while no Kairos Shield is connected. Kairos can\u{2019}t tell which Chromium browser Shield is running in, so one connected Shield counts for all of them."),
         st.block_unshielded_browsers,
-        true,
-        setter(model, |d, on| d.settings.block_unshielded_browsers = on),
+        !(locked && st.block_unshielded_browsers),
+        setter(model, |st, on| st.block_unshielded_browsers = on),
     ));
     if let Some(e) = &s.last_jev_error {
         sec.append(&styled(&format!("Last Jev error: {e}"), "kairos-warning-text"));
@@ -1313,7 +1360,7 @@ fn settings(model: &Rc<Model>) -> gtk::Widget {
         let cur = SceneBackend::ALL.iter().position(|e| *e == st.scene_backend).unwrap_or(0);
         sec.append(&labeled("Write scenes with", &dropdown(&opts, cur, move |i| {
             let m = m.clone();
-            glib::idle_add_local_once(move || m.edit(|d| d.settings.scene_backend = SceneBackend::ALL[i]));
+            glib::idle_add_local_once(move || m.update_settings(|st| st.scene_backend = SceneBackend::ALL[i]));
         })));
     }
     let (ready, text) = s.scene_setup.status(st.scene_backend, s.has_claude_key);
@@ -1329,7 +1376,7 @@ fn settings(model: &Rc<Model>) -> gtk::Widget {
         sec.append(&labeled("Voice", &dropdown(&opts, cur, move |i| {
             let m = m.clone();
             glib::idle_add_local_once(move || {
-                m.edit(|d| d.settings.set_voice_provider(VoiceProvider::ALL[i]));
+                m.update_settings(|st| st.set_voice_provider(VoiceProvider::ALL[i]));
                 m.load_cloud_voices();
             });
         })));
@@ -1348,7 +1395,7 @@ fn settings(model: &Rc<Model>) -> gtk::Widget {
         let m = model.clone();
         sec.append(&labeled("Voice name", &dropdown(&names, cur, move |i| {
             let v = ids.get(i).cloned().unwrap_or_default();
-            m.edit(|d| d.settings.voice_id = v);
+            m.update_settings(|st| st.voice_id = v);
         })));
         let label = st.voice_provider.label();
         sec.append(&caption(&if s.cloud_voice_ready() {
@@ -1394,9 +1441,13 @@ fn settings(model: &Rc<Model>) -> gtk::Widget {
 
     // Privacy
     let (outer, sec) = section("Privacy");
+    if let Some(l) = &lock {
+        // A site on this list is one Jev no longer checks, so adding waits for the lock.
+        sec.append(&lock_note(l));
+    }
     {
         let m = model.clone();
-        sec.append(&string_list("Never send off this computer", "mybank.com", &st.never_analyse, normalize_site, true, true, move |next| m.edit(|d| d.settings.never_analyse = next)));
+        sec.append(&string_list("Never send off this computer", "mybank.com", &st.never_analyse, normalize_site, !locked, true, move |next| m.update_settings(|st| st.never_analyse = next)));
     }
     sec.append(&caption("Jev never sees these sites, Kairos Read reads them with the built-in voice and makes no scenes from them. Jev is only told a browser\u{2019}s name, never its page title."));
     b.append(&outer);
@@ -1422,11 +1473,23 @@ fn settings(model: &Rc<Model>) -> gtk::Widget {
     scrolled(&b).upcast()
 }
 
-fn setter(model: &Rc<Model>, f: fn(&mut AppData, bool)) -> impl Fn(bool) + 'static {
+/// The strict lock's note, shown above the controls it disables.
+fn lock_note(text: &str) -> gtk::Box {
+    let row = hbox(8);
+    let icon = gtk::Image::from_icon_name("changes-prevent-symbolic");
+    icon.add_css_class("kairos-lock");
+    row.append(&icon);
+    row.append(&styled(text, "kairos-lock"));
+    row
+}
+
+/// A Settings switch. Settings change only through `Model::update_settings`, which refuses
+/// loosening blocking during a locked strict phase.
+fn setter(model: &Rc<Model>, f: fn(&mut Settings, bool)) -> impl Fn(bool) + 'static {
     let m = model.clone();
     move |on| {
         let m = m.clone();
-        glib::idle_add_local_once(move || m.edit(|d| f(d, on)));
+        glib::idle_add_local_once(move || m.update_settings(|st| f(st, on)));
     }
 }
 
@@ -1437,7 +1500,7 @@ fn labeled_spin(title: &str, min: f64, max: f64, step: f64, value: f64, f: impl 
     b
 }
 
-fn hotkey_picker(model: &Rc<Model>, title: &str, choices: &'static [hotkeys::HotkeyChoice], current: &str, set: fn(&mut AppData, String)) -> gtk::Box {
+fn hotkey_picker(model: &Rc<Model>, title: &str, choices: &'static [hotkeys::HotkeyChoice], current: &str, set: fn(&mut Settings, String)) -> gtk::Box {
     let mut labels: Vec<String> = choices.iter().map(|c| c.label.to_string()).collect();
     labels.push("Off".into());
     let cur = if current == hotkeys::OFF { choices.len() } else { choices.iter().position(|c| c.id == current).unwrap_or(0) };
@@ -1445,7 +1508,7 @@ fn hotkey_picker(model: &Rc<Model>, title: &str, choices: &'static [hotkeys::Hot
     labeled(title, &dropdown(&labels, cur, move |i| {
         let v = choices.get(i).map(|c| c.id.to_string()).unwrap_or_else(|| hotkeys::OFF.to_string());
         let m = m.clone();
-        glib::idle_add_local_once(move || m.edit(|d| set(d, v)));
+        glib::idle_add_local_once(move || m.update_settings(|st| set(st, v)));
     }))
 }
 

@@ -98,26 +98,34 @@ pub fn lock_path() -> PathBuf {
     store::default_directory().join("panel.lock")
 }
 
+/// Quotes `value` for sh as one word that sh expands nothing in: `'...'`, with each `'` written
+/// as `'\''`.
+pub fn sh_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
 /// The restore script: puts the saved values back unless Kairos is running, then removes the
 /// saved values, stops the timer and deletes itself. It holds `panel.lock` from before its
-/// check until it ends. `--force` is Kairos running it while already holding the lock.
+/// check until it ends. `--force` is Kairos running it while already holding the lock. The
+/// check only counts this user's Kairos, and every value and path is single-quoted, so nothing
+/// in a saved gsettings value (`$`, a backtick, `\`) is run or expanded by sh.
 pub fn restore_script(saved: &Saved) -> String {
     format!(
         "#!/bin/sh\n# Written by Kairos. Restores Cinnamon's panel if Kairos is not running.\n\
          if [ \"$1\" != \"--force\" ]; then\n\
-         \x20 exec 9>\"{lock}\"\n\
+         \x20 exec 9>{lock}\n\
          \x20 flock 9\n\
-         \x20 if pgrep -x kairos >/dev/null 2>&1; then exit 0; fi\n\
+         \x20 if pgrep -u \"$(id -u)\" -x kairos >/dev/null 2>&1; then exit 0; fi\n\
          fi\n\
-         gsettings set {SCHEMA} {AUTOHIDE} \"{autohide}\"\n\
-         gsettings set {SCHEMA} {SHOW_DELAY} \"{delay}\"\n\
-         rm -f \"{saved}\"\n\
+         gsettings set {SCHEMA} {AUTOHIDE} {autohide}\n\
+         gsettings set {SCHEMA} {SHOW_DELAY} {delay}\n\
+         rm -f {saved}\n\
          systemctl --user disable --now {UNIT}.timer >/dev/null 2>&1\n\
          rm -f \"$0\"\n",
-        lock = lock_path().display(),
-        autohide = saved.autohide.replace('"', "\\\""),
-        delay = saved.show_delay.replace('"', "\\\""),
-        saved = saved_path().display()
+        lock = sh_quote(&lock_path().display().to_string()),
+        autohide = sh_quote(&saved.autohide),
+        delay = sh_quote(&saved.show_delay),
+        saved = sh_quote(&saved_path().display().to_string())
     )
 }
 
@@ -308,7 +316,7 @@ mod tests {
     fn script_locks_checks_and_removes_itself() {
         let s = restore_script(&Saved { autohide: "['1:false']".into(), show_delay: "['1:0']".into() });
         let lock = s.find("flock 9").unwrap();
-        let check = s.find("pgrep -x kairos").unwrap();
+        let check = s.find("pgrep -u \"$(id -u)\" -x kairos").unwrap();
         let set = s.find("gsettings set").unwrap();
         assert!(lock < check && check < set, "{s}");
         assert!(s.contains("disable --now kairos-panel-watchdog.timer"));

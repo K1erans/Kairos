@@ -40,6 +40,29 @@ pub struct BridgeServer {
     path: PathBuf,
     clients: Arc<Mutex<HashMap<ClientId, Client>>>,
     listener: Arc<Mutex<Option<UnixListener>>>,
+    /// (device, inode) of the socket file this server bound, so `stop` removes only its own.
+    bound: Arc<Mutex<Option<(u64, u64)>>>,
+}
+
+/// Holds `<socket>.lock` until dropped. The app's single-instance lock (`kairos.lock`) already
+/// keeps a second Kairos on the same data folder from getting this far, but it lets a launch
+/// through when it can't make its lock file, and `BridgeServer` is also used on its own. This
+/// lock makes "is a server listening? if not, remove the stale socket and bind" one step, so two
+/// servers starting together can't both remove and bind, and a server stopping can't delete the
+/// socket a new one has just bound.
+struct BindLock(#[allow(dead_code)] Option<std::fs::File>);
+
+fn bind_lock(socket: &Path) -> BindLock {
+    let mut name = socket.as_os_str().to_owned();
+    name.push(".lock");
+    let file = std::fs::OpenOptions::new().create(true).truncate(false).write(true).open(PathBuf::from(name)).ok();
+    // Without a lock file, carry on: the instance lock still covers the usual case.
+    BindLock(file.filter(|f| f.lock().is_ok()))
+}
+
+fn file_id(path: &Path) -> Option<(u64, u64)> {
+    use std::os::unix::fs::MetadataExt;
+    std::fs::symlink_metadata(path).ok().map(|m| (m.dev(), m.ino()))
 }
 
 #[derive(Debug)]
@@ -66,7 +89,12 @@ pub fn is_listening(path: &Path) -> bool {
 
 impl BridgeServer {
     pub fn new(path: PathBuf) -> Self {
-        BridgeServer { path, clients: Arc::new(Mutex::new(HashMap::new())), listener: Arc::new(Mutex::new(None)) }
+        BridgeServer {
+            path,
+            clients: Arc::new(Mutex::new(HashMap::new())),
+            listener: Arc::new(Mutex::new(None)),
+            bound: Arc::new(Mutex::new(None)),
+        }
     }
 
     /// Fails with `AlreadyRunning` rather than take the socket from a live server.
@@ -77,12 +105,15 @@ impl BridgeServer {
         if let Some(dir) = self.path.parent() {
             std::fs::create_dir_all(dir).map_err(StartError::Io)?;
         }
+        let lock = bind_lock(&self.path);
         if is_listening(&self.path) {
             return Err(StartError::AlreadyRunning);
         }
         let _ = std::fs::remove_file(&self.path);
         let listener = UnixListener::bind(&self.path).map_err(StartError::Io)?;
         let _ = std::fs::set_permissions(&self.path, std::fs::Permissions::from_mode(0o600));
+        *self.bound.lock().unwrap() = file_id(&self.path);
+        drop(lock);
         let accept = listener.try_clone().map_err(StartError::Io)?;
         *self.listener.lock().unwrap() = Some(listener);
         let clients = self.clients.clone();
@@ -129,7 +160,12 @@ impl BridgeServer {
         for c in self.clients.lock().unwrap().values() {
             let _ = c.stream.lock().unwrap().shutdown(std::net::Shutdown::Both);
         }
-        let _ = std::fs::remove_file(&self.path);
+        if let Some(id) = self.bound.lock().unwrap().take() {
+            let _lock = bind_lock(&self.path);
+            if file_id(&self.path) == Some(id) {
+                let _ = std::fs::remove_file(&self.path);
+            }
+        }
     }
 
     pub fn client_names(&self) -> Vec<String> {
@@ -217,6 +253,7 @@ pub const BROWSER_DIRS: &[(&str, &str)] = &[
     ("Microsoft Edge Beta", "microsoft-edge-beta/NativeMessagingHosts"),
     ("Vivaldi", "vivaldi/NativeMessagingHosts"),
     ("Opera", "opera/NativeMessagingHosts"),
+    ("Helium", "net.imput.helium/NativeMessagingHosts"),
 ];
 
 /// Writes the native messaging manifest for every Chromium browser that has a profile folder.

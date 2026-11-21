@@ -270,7 +270,10 @@ pub struct Model {
     last_pushed: RefCell<String>,
     grant_timer: RefCell<Option<glib::SourceId>>,
     reminder_inputs: RefCell<Option<reminders::Inputs>>,
-    reminder_timers: RefCell<Vec<glib::SourceId>>,
+    /// Pending due-reminder timers by key. Each removes its own entry as it fires: removing a
+    /// source that has already fired panics in glib.
+    reminder_timers: RefCell<HashMap<u64, glib::SourceId>>,
+    reminder_seq: Cell<u64>,
     reminder_debounce: RefCell<Option<glib::SourceId>>,
     reminder_ids: RefCell<Vec<String>>,
     notice_count: Cell<u64>,
@@ -334,7 +337,8 @@ impl Model {
             last_pushed: RefCell::new(String::new()),
             grant_timer: RefCell::new(None),
             reminder_inputs: RefCell::new(None),
-            reminder_timers: RefCell::new(vec![]),
+            reminder_timers: RefCell::new(HashMap::new()),
+            reminder_seq: Cell::new(0),
             reminder_debounce: RefCell::new(None),
             reminder_ids: RefCell::new(vec![]),
             notice_count: Cell::new(0),
@@ -390,6 +394,11 @@ impl Model {
     }
 
     // MARK: Lifecycle
+
+    /// Why the data file couldn't be read, while Kairos refuses to save over it.
+    pub fn store_problem(&self) -> Option<String> {
+        self.store.problem()
+    }
 
     pub fn start(self: &Rc<Self>) {
         self.guards_apps.set(!store::is_scratch() && self.x.is_some());
@@ -694,8 +703,11 @@ impl Model {
         }
     }
 
+    /// The Mode picker on Today and the tray's Mode menu, which lock while a timer runs (the
+    /// timer owns the mode then). A press from a stale view, such as a tray menu opened before
+    /// the timer started, is refused here too, so it cannot take a strict phase out of Strict.
     pub fn set_mode(self: &Rc<Self>, mode: Mode) {
-        if mode == self.s().mode() {
+        if mode == self.s().mode() || self.s().tempo.phase() != TempoPhase::Idle {
             return;
         }
         self.edit(|d| d.focus.mode = mode);
@@ -770,8 +782,8 @@ impl Model {
     }
 
     /// Edits one group; edits that would loosen the active group's rules during a locked strict
-    /// phase are refused (RuleLock).
-    pub fn update_group(self: &Rc<Self>, id: Id, f: impl FnOnce(&mut AppGroup)) {
+    /// phase are refused (RuleLock). Returns whether the group changed.
+    pub fn update_group(self: &Rc<Self>, id: Id, f: impl FnOnce(&mut AppGroup)) -> bool {
         let locked = self.s().strict_locked();
         let mut changed = false;
         self.edit(|d| changed = d.update_group(id, locked, f));
@@ -779,18 +791,39 @@ impl Model {
             // A refused edit: views redraw from the unchanged data.
             self.emit(change::DATA);
         }
+        changed
     }
 
-    pub fn add_dock_app(self: &Rc<Self>, app: &str, group: Option<Id>) {
-        let target = group.or(self.s().data.focus.active_group_id);
+    /// Sets one of a group's app lists, such as its Kairos Bar apps. Returns whether the list now
+    /// reads `next`: false when the strict lock refused it.
+    pub fn set_group_apps(self: &Rc<Self>, id: Id, next: Vec<String>, list: fn(&mut AppGroup) -> &mut Vec<String>) -> bool {
+        let want = next.clone();
+        self.update_group(id, move |g| *list(g) = next);
+        let Some(mut g) = self.s().data.group(Some(id)).cloned() else { return false };
+        *list(&mut g) == want
+    }
+
+    /// Edits Settings; a change that would loosen blocking during a locked strict phase is
+    /// refused (RuleLock), and the views redraw from the unchanged data.
+    pub fn update_settings(self: &Rc<Self>, f: impl FnOnce(&mut Settings)) {
+        let locked = self.s().strict_locked();
+        let mut changed = false;
+        self.edit(|d| changed = d.update_settings(locked, f));
+        if !changed {
+            self.emit(change::DATA);
+        }
+    }
+
+    /// Pins an app to a group's Kairos Bar (the active group's when `group` is None). An app in
+    /// the active group's bar is trusted by Jev, so during a locked strict phase this is refused.
+    pub fn add_dock_app(self: &Rc<Self>, app: &str, group: Option<Id>) -> bool {
+        let Some(target) = group.or(self.s().data.focus.active_group_id) else { return false };
         let app = app.to_string();
-        self.edit(|d| {
-            if let Some(g) = d.groups.iter_mut().find(|g| Some(g.id) == target) {
-                if !g.dock_apps.contains(&app) {
-                    g.dock_apps.push(app);
-                }
+        self.update_group(target, |g| {
+            if !g.dock_apps.contains(&app) {
+                g.dock_apps.push(app);
             }
-        });
+        })
     }
 
     /// "Block in <group>" from Kairos Bar. A newly blocked app on screen is hidden at once.
@@ -804,22 +837,14 @@ impl Model {
     }
 
     pub fn remove_dock_app(self: &Rc<Self>, app: &str) {
-        let active = self.s().data.focus.active_group_id;
-        self.edit(|d| {
-            if let Some(g) = d.groups.iter_mut().find(|g| Some(g.id) == active) {
-                g.dock_apps.retain(|a| a != app);
-            }
-        });
+        let Some(active) = self.s().data.focus.active_group_id else { return };
+        self.update_group(active, |g| g.dock_apps.retain(|a| a != app));
     }
 
     pub fn move_dock_app_by(self: &Rc<Self>, app: &str, offset: i64, group: Option<Id>) {
-        let target = group.or(self.s().data.focus.active_group_id);
+        let Some(target) = group.or(self.s().data.focus.active_group_id) else { return };
         let app = app.to_string();
-        self.edit(|d| {
-            if let Some(g) = d.groups.iter_mut().find(|g| Some(g.id) == target) {
-                g.dock_apps = dock::moving_by(&g.dock_apps, &app, offset);
-            }
-        });
+        self.update_group(target, |g| g.dock_apps = dock::moving_by(&g.dock_apps, &app, offset));
     }
 
     pub fn move_dock_app_to(self: &Rc<Self>, app: &str, index: usize) {
@@ -832,12 +857,8 @@ impl Model {
             }
             moved
         };
-        let active = self.s().data.focus.active_group_id;
-        self.edit(|d| {
-            if let Some(g) = d.groups.iter_mut().find(|g| Some(g.id) == active) {
-                g.dock_apps = moved;
-            }
-        });
+        let Some(active) = self.s().data.focus.active_group_id else { return };
+        self.update_group(active, |g| g.dock_apps = moved);
     }
 
     // MARK: Tempo
@@ -1087,7 +1108,8 @@ impl Model {
         let inputs = reminders::Inputs::new(&self.s().data);
         let plan = reminders::plan(&inputs, time::now());
         *self.reminder_inputs.borrow_mut() = Some(inputs);
-        for id in self.reminder_timers.borrow_mut().drain(..) {
+        let pending: Vec<glib::SourceId> = self.reminder_timers.borrow_mut().drain().map(|(_, id)| id).collect();
+        for id in pending {
             id.remove();
         }
         let withdraw = self.hooks.borrow().withdraw_notification.clone();
@@ -1098,16 +1120,35 @@ impl Model {
             }
         }
         *self.reminder_ids.borrow_mut() = planned.into_iter().collect();
+        // glib counts a timeout in u32 milliseconds, so a wait over about 49 days would wrap and
+        // fire early. Reminders further off than a day get one timer that plans again then.
+        const LONGEST_WAIT: f64 = 24.0 * 3600.0;
+        let mut replan_armed = false;
         for r in plan {
             let wait = time::since(r.fire_at, time::now()).max(0.0);
-            let weak = Rc::downgrade(self);
-            let id = glib::timeout_add_local_once(Duration::from_secs_f64(wait), move || {
-                if let Some(m) = weak.upgrade() {
-                    m.notify(Some(&r.id), &r.title, &r.body);
+            if wait > LONGEST_WAIT {
+                if !replan_armed {
+                    replan_armed = true;
+                    self.add_reminder_timer(LONGEST_WAIT, |m| m.schedule_reminders());
                 }
-            });
-            self.reminder_timers.borrow_mut().push(id);
+                continue;
+            }
+            self.add_reminder_timer(wait, move |m| m.notify(Some(&r.id), &r.title, &r.body));
         }
+    }
+
+    /// A one-shot reminder timer that drops its own id from `reminder_timers` before it runs.
+    fn add_reminder_timer(self: &Rc<Self>, wait: f64, f: impl FnOnce(&Rc<Model>) + 'static) {
+        let key = self.reminder_seq.get() + 1;
+        self.reminder_seq.set(key);
+        let weak = Rc::downgrade(self);
+        let id = glib::timeout_add_local_once(Duration::from_secs_f64(wait), move || {
+            if let Some(m) = weak.upgrade() {
+                m.reminder_timers.borrow_mut().remove(&key);
+                f(&m);
+            }
+        });
+        self.reminder_timers.borrow_mut().insert(key, id);
     }
 
     // MARK: Running apps and group visibility
@@ -1388,6 +1429,11 @@ impl Model {
     fn request_override(self: &Rc<Self>, target: &str, reason: &str) -> Result<Date, Refusal> {
         let result = {
             let mut s = self.state.borrow_mut();
+            // Only something blocked right now can be allowed, so one request can't open a
+            // whole suffix or every app.
+            if !s.data.is_blocked_target(target, s.shield_connected()) {
+                return Err(Refusal::NotBlocked);
+            }
             let (mode, max, minutes) = (s.mode(), s.data.settings.max_overrides_per_session, s.data.settings.override_minutes);
             s.ledger.request(target, reason, mode, max, minutes, time::now())
         };

@@ -597,7 +597,7 @@ impl KairosBar {
                     let px = (size * self.scale()).round() as i32;
                     let alpha = if launching.contains(id) { 0.55 + 0.45 * (now_s(&self.clock) * 5.0).sin().abs() } else { 1.0 };
                     let blocked = s.mode().blocks() && s.is_app_blocked(id);
-                    if let Some(pb) = icons::pixbuf(id, Apps::icon(id), px.max(16)) {
+                    if let Some(pb) = icons::pixbuf(id, || Apps::icon(id), px.max(16)) {
                         paint_pixbuf(cr, &pb, cx - size / 2.0, cy - size / 2.0, size, if blocked { alpha * 0.4 } else { alpha });
                     }
                     if s.running_ids.contains(id) {
@@ -640,7 +640,7 @@ impl KairosBar {
         // The dragged app follows the pointer.
         if let (Some(Slot::App(id)), Some((lx, ly))) = (&dragging, self.pointer.get()) {
             let size = g.icon * g.max_scale.min(1.2);
-            if let Some(pb) = icons::pixbuf(id, Apps::icon(id), (size * self.scale()).round() as i32) {
+            if let Some(pb) = icons::pixbuf(id, || Apps::icon(id), (size * self.scale()).round() as i32) {
                 paint_pixbuf(cr, &pb, lx - size / 2.0, ly - size / 2.0, size, 0.9);
             }
         }
@@ -797,7 +797,7 @@ impl KairosBar {
         match DockDrop::plan(&paths, slot.as_ref(), &|p| Apps::id_for_file(p)) {
             DockDrop::AddApps(ids) => {
                 for id in ids {
-                    self.model.add_dock_app(&id, None);
+                    let _ = self.model.add_dock_app(&id, None);
                 }
             }
             DockDrop::Open(files, id) => {
@@ -908,7 +908,7 @@ impl KairosBar {
                     let x = m.x.clone();
                     add(&format!("window{i}"), Box::new(move || {
                         if let Some(x) = &x {
-                            x.activate(w);
+                            x.bring_forward(&[w]);
                         }
                     }));
                 }
@@ -916,6 +916,7 @@ impl KairosBar {
                     menu.append_section(None, &section);
                 }
                 let options = gio::Menu::new();
+                let locked = m.s().active_group().map(|g| m.s().rule_lock(g.id).is_some()).unwrap_or(false);
                 if pinned {
                     options.append(Some("Remove from Kairos Bar"), Some("bar.unpin"));
                     let (mm, id2) = (m.clone(), id.clone());
@@ -932,14 +933,16 @@ impl KairosBar {
                     add("left", Box::new(move || mm.move_dock_app_by(&id2, -1, None)));
                     let (mm, id2) = (m.clone(), id.clone());
                     add("right", Box::new(move || mm.move_dock_app_by(&id2, 1, None)));
-                } else {
+                } else if !locked {
+                    // Jev trusts the apps in the active group's bar, so pinning waits for the lock.
                     options.append(Some("Keep in Kairos Bar"), Some("bar.pin"));
                     let (mm, id2) = (m.clone(), id.clone());
-                    add("pin", Box::new(move || mm.add_dock_app(&id2, None)));
+                    add("pin", Box::new(move || {
+                        mm.add_dock_app(&id2, None);
+                    }));
                 }
                 let group_name = m.s().active_group().map(|g| g.name.clone()).unwrap_or_default();
                 let blocked = m.s().active_group().map(|g| g.blocked_apps.contains(&id)).unwrap_or(false);
-                let locked = m.s().active_group().map(|g| m.s().rule_lock(g.id).is_some()).unwrap_or(false);
                 if blocked {
                     if !locked {
                         options.append(Some(&format!("Unblock in {group_name}")), Some("bar.unblock"));

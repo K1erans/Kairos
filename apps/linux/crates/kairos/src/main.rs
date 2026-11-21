@@ -17,7 +17,7 @@ use platform::x11::{WmEvent, X11};
 use std::cell::{Cell, RefCell};
 use std::io::Write;
 use std::rc::Rc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use ui::window::MainWindow;
 
 fn main() -> glib::ExitCode {
@@ -25,6 +25,11 @@ fn main() -> glib::ExitCode {
     if args.iter().any(|a| a == "--install-bridge") {
         let done = bridge_installer::install();
         println!("{}", if done.is_empty() { "No browser found.".to_string() } else { format!("Installed for {}", done.join(", ")) });
+        return glib::ExitCode::SUCCESS;
+    }
+    if args.iter().any(|a| a == "--uninstall-bridge") {
+        let done = bridge_installer::uninstall();
+        println!("{}", if done.is_empty() { "No browser had the bridge.".to_string() } else { format!("Removed from {}", done.join(", ")) });
         return glib::ExitCode::SUCCESS;
     }
     if args.iter().any(|a| a == "--restore-panel") {
@@ -92,6 +97,9 @@ fn show_running_instance() {
     }
 }
 
+/// How long to wait before trying again to hide Cinnamon's panel after it failed.
+const PANEL_RETRY: Duration = Duration::from_secs(30);
+
 struct App {
     app: gtk::Application,
     model: Rc<Model>,
@@ -103,6 +111,9 @@ struct App {
     tray: RefCell<Option<ksni::Handle<KairosTray>>>,
     tray_snap: RefCell<TraySnapshot>,
     panel_hidden: Cell<bool>,
+    /// After hiding Cinnamon's panel fails, when to try again (each try runs gsettings and
+    /// systemctl, and sync_panel runs on every data change).
+    panel_retry_at: Cell<Option<Instant>>,
     _hold: gio::ApplicationHoldGuard,
 }
 
@@ -126,6 +137,7 @@ fn start(app: &gtk::Application) {
         tray: RefCell::new(None),
         tray_snap: RefCell::new(TraySnapshot::default()),
         panel_hidden: Cell::new(false),
+        panel_retry_at: Cell::new(None),
         _hold: app.hold(),
     });
     // Keeps the overlay alive for the life of the app.
@@ -188,6 +200,15 @@ fn start(app: &gtk::Application) {
         });
     }
     model.start();
+    if let Some(problem) = model.store_problem() {
+        let path = store::default_directory().join("kairos.json");
+        ui::widgets::alert(
+            None,
+            "Kairos couldn\u{2019}t read your data",
+            &format!("{problem}\n\nKairos started empty and won\u{2019}t save, so your data in {} stays as it is. Fix the file (for example its permissions) and open Kairos again.", path.display()),
+        );
+    }
+    platform::system::autostart::upgrade();
     me.grab_hotkeys();
     me.sync_panel();
     me.start_tray();
@@ -269,7 +290,10 @@ fn install_hooks(me: &Rc<App>) {
         let model = me.model.clone();
         hooks.confirm_strict = Some(Rc::new(move |c, then| {
             let then = RefCell::new(Some(then));
-            let parent = ui::widgets::main_window(&model);
+            // Started from the tray or the timer shortcut the main window may be hidden, and a
+            // dialog on a hidden parent may not show; then it stands alone.
+            let parent = ui::widgets::main_window(&model).filter(|w| w.is_visible());
+            let before = ui::widgets::toplevels();
             ui::widgets::ask(parent.as_ref(), &c.title, &c.message, &["Start strict focus", "Cancel"], 1, move |r| {
                 if r == Some(0) {
                     if let Some(f) = then.borrow_mut().take() {
@@ -277,6 +301,10 @@ fn install_hooks(me: &Rc<App>) {
                     }
                 }
             });
+            // The dialog's window is made inside ask(); give it the keyboard.
+            for w in ui::widgets::toplevels().into_iter().filter(|w| !before.contains(w)) {
+                ui::widgets::bring_to_front(model.x.as_ref(), &w);
+            }
         }));
     }
     drop(hooks);
@@ -291,31 +319,11 @@ fn install_hooks(me: &Rc<App>) {
 }
 
 impl App {
-    /// Shows the main window and brings it forward. present() alone is not enough for an
-    /// already-open window: without a user timestamp Muffin's focus-stealing prevention only
-    /// marks it as wanting attention, which shows nowhere while Kairos hides the panel. So the
-    /// window is also activated as a pager would, which Muffin obeys, after moving it to the
-    /// workspace on screen (Muffin ignores activation across workspaces). A window that was hidden
-    /// is mapped a moment after present(), so it is activated again then.
+    /// Shows the main window and brings it forward with focus (see `bring_to_front`: present()
+    /// alone is not enough for an already-open window).
     fn show_window(self: &Rc<Self>) {
         self.window.present();
-        self.activate_window();
-        let weak = Rc::downgrade(self);
-        glib::timeout_add_local_once(Duration::from_millis(150), move || {
-            if let Some(me) = weak.upgrade() {
-                me.activate_window();
-            }
-        });
-    }
-
-    fn activate_window(&self) {
-        let Some(x) = &self.x else { return };
-        let surface = self.window.window.surface().and_then(|s| s.downcast::<gdk4_x11::X11Surface>().ok());
-        if let Some(xid) = surface.map(|s| s.xid() as u32) {
-            // Muffin won't activate a window on another workspace, so it comes to this one.
-            x.move_to_current_desktop(xid);
-            x.activate(xid);
-        }
+        ui::widgets::bring_to_front(self.x.as_ref(), &self.window.window);
     }
 
     fn grab_hotkeys(&self) {
@@ -334,8 +342,9 @@ impl App {
         }
     }
 
-    /// Hides Cinnamon's panel while Kairos Bar takes its place, and puts it back otherwise.
-    fn sync_panel(&self) {
+    /// Hides Cinnamon's panel while Kairos Bar takes its place, and puts it back otherwise. When
+    /// hiding fails it is tried again after PANEL_RETRY, not on every data change.
+    fn sync_panel(self: &Rc<Self>) {
         if store::is_scratch() {
             return;
         }
@@ -344,11 +353,29 @@ impl App {
             return;
         }
         if want {
+            if self.panel_retry_at.get().is_some_and(|at| Instant::now() < at) {
+                return;
+            }
             match panel::replace() {
-                Ok(()) => self.panel_hidden.set(true),
-                Err(e) => eprintln!("Kairos: could not hide Cinnamon's panel: {e:?}"),
+                Ok(()) => {
+                    self.panel_hidden.set(true);
+                    self.panel_retry_at.set(None);
+                }
+                Err(e) => {
+                    eprintln!("Kairos: could not hide Cinnamon's panel: {e:?}");
+                    self.panel_retry_at.set(Some(Instant::now() + PANEL_RETRY));
+                    let weak = Rc::downgrade(self);
+                    glib::timeout_add_local_once(PANEL_RETRY, move || {
+                        if let Some(me) = weak.upgrade() {
+                            me.sync_panel();
+                        }
+                    });
+                    return;
+                }
             }
         } else {
+            // Turning the setting off and on again tries at once.
+            self.panel_retry_at.set(None);
             panel::restore();
             self.panel_hidden.set(false);
         }

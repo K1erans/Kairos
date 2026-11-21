@@ -91,13 +91,14 @@ impl AppData {
         None
     }
 
-    /// Marks the newest unmarked block of `target` as overridden.
+    /// Marks the newest unmarked block of `target` as overridden. An app id marks only that app;
+    /// a site also marks blocks of its subdomains (see `rules::target_matches`).
     pub fn mark_overridden(&mut self, target: &str) {
         if let Some(e) = self
             .block_events
             .iter_mut()
             .rev()
-            .find(|e| !e.overridden && (e.target == target || crate::rules::host_matches(&e.target, target)))
+            .find(|e| !e.overridden && crate::rules::target_matches(&e.target, target))
         {
             e.overridden = true;
         }

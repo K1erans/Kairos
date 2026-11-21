@@ -93,13 +93,32 @@ pub fn extract_html(raw: &str) -> Result<String, ClaudeError> {
             s.truncate(close);
         }
     }
-    let lower = s.to_lowercase();
-    let start = lower.find("<!doctype html").or_else(|| lower.find("<html")).ok_or(ClaudeError::Empty)?;
-    let end = lower.rfind("</html>").ok_or(ClaudeError::Empty)? + "</html>".len();
+    // ASCII case folding keeps byte positions, so they can slice `s`. `to_lowercase` does not:
+    // some characters (such as `İ`) grow when lower-cased.
+    let start = find_ascii_ci(&s, "<!doctype html").or_else(|| find_ascii_ci(&s, "<html")).ok_or(ClaudeError::Empty)?;
+    let end = rfind_ascii_ci(&s, "</html>").ok_or(ClaudeError::Empty)? + "</html>".len();
     if end <= start {
         return Err(ClaudeError::Empty);
     }
     Ok(s[start..end].to_string())
+}
+
+/// Byte offset of the first ASCII-case-insensitive match of the ASCII `needle`. A match of an
+/// ASCII needle always starts and ends on a char boundary.
+fn find_ascii_ci(hay: &str, needle: &str) -> Option<usize> {
+    let (h, n) = (hay.as_bytes(), needle.as_bytes());
+    if n.len() > h.len() {
+        return None;
+    }
+    (0..=h.len() - n.len()).find(|&i| h[i..i + n.len()].eq_ignore_ascii_case(n))
+}
+
+fn rfind_ascii_ci(hay: &str, needle: &str) -> Option<usize> {
+    let (h, n) = (hay.as_bytes(), needle.as_bytes());
+    if n.len() > h.len() {
+        return None;
+    }
+    (0..=h.len() - n.len()).rev().find(|&i| h[i..i + n.len()].eq_ignore_ascii_case(n))
 }
 
 pub fn generate_prompt(title: &str, text: &str, subject: &str) -> ClaudePrompt {

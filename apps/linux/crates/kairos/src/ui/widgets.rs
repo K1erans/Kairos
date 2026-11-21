@@ -3,13 +3,15 @@
 
 use crate::model::{change, Model, Page};
 use crate::platform::apps::Apps;
+use crate::platform::x11::X11;
 use crate::ui::icons;
 use gtk::prelude::*;
 use gtk::{gio, glib};
 use kairos_core::duetext;
 use kairos_core::*;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
+use std::sync::Arc;
 
 pub const CSS: &str = r#"
 .kairos-card { background: alpha(@theme_fg_color, 0.06); border-radius: 14px; padding: 16px; }
@@ -411,8 +413,9 @@ pub fn normalize_site(s: &str) -> String {
     kairos_core::rules::normalize_site(s)
 }
 
-/// A list of apps with an "Add apps…" picker, optional up and down buttons, and removal.
-pub fn app_list(model: &Rc<Model>, title: &str, empty: &str, ids: &[String], reorderable: bool, can_remove: bool, set: impl Fn(Vec<String>) + 'static) -> gtk::Box {
+/// A list of apps with an "Add apps…" picker, optional up and down buttons, and removal. `set`
+/// returns whether the change was made (the strict lock can refuse it).
+pub fn app_list(model: &Rc<Model>, title: &str, empty: &str, ids: &[String], reorderable: bool, can_remove: bool, set: impl Fn(Vec<String>) -> bool + 'static) -> gtk::Box {
     let set = Rc::new(set);
     let b = vbox(6);
     let head = hbox(8);
@@ -444,31 +447,39 @@ pub fn app_list(model: &Rc<Model>, title: &str, empty: &str, ids: &[String], reo
         row.append(&l);
         if reorderable {
             let (s1, ids1, id1) = (set.clone(), ids.to_vec(), id.clone());
-            let up = icon_button("go-up-symbolic", &format!("Move {name} up"), move || s1(dock::moving_by(&ids1, &id1, -1)));
+            let up = icon_button("go-up-symbolic", &format!("Move {name} up"), move || {
+                s1(dock::moving_by(&ids1, &id1, -1));
+            });
             up.set_sensitive(i > 0);
             row.append(&up);
             let (s2, ids2, id2) = (set.clone(), ids.to_vec(), id.clone());
-            let down = icon_button("go-down-symbolic", &format!("Move {name} down"), move || s2(dock::moving_by(&ids2, &id2, 1)));
+            let down = icon_button("go-down-symbolic", &format!("Move {name} down"), move || {
+                s2(dock::moving_by(&ids2, &id2, 1));
+            });
             down.set_sensitive(i + 1 < ids.len());
             row.append(&down);
         }
         if can_remove {
             let (s3, ids3, id3) = (set.clone(), ids.to_vec(), id.clone());
-            row.append(&icon_button("list-remove-symbolic", &format!("Remove {name}"), move || s3(ids3.iter().filter(|x| **x != id3).cloned().collect())));
+            row.append(&icon_button("list-remove-symbolic", &format!("Remove {name}"), move || {
+                s3(ids3.iter().filter(|x| **x != id3).cloned().collect());
+            }));
         }
         b.append(&row);
     }
     b
 }
 
-/// Ticks apps on or off from every app the menu shows. Return ticks the first match.
-pub fn app_picker(model: &Rc<Model>, selection: Vec<String>, done: impl Fn(Vec<String>) + 'static) {
+/// Ticks apps on or off from every app the menu shows. Return ticks the first match. `done`
+/// gets the new list on every tick and returns false when it was refused, which unticks it.
+pub fn app_picker(model: &Rc<Model>, selection: Vec<String>, done: impl Fn(Vec<String>) -> bool + 'static) {
     let win = gtk::Window::builder().title("Choose apps").default_width(420).default_height(520).modal(true).build();
     if let Some(parent) = main_window(model) {
         win.set_transient_for(Some(&parent));
     }
     let chosen = Rc::new(RefCell::new(selection));
     let done = Rc::new(done);
+    let reverting = Rc::new(Cell::new(false));
     let root = vbox(0);
     let search = gtk::SearchEntry::new();
     search.set_placeholder_text(Some("Search apps"));
@@ -491,19 +502,26 @@ pub fn app_picker(model: &Rc<Model>, selection: Vec<String>, done: impl Fn(Vec<S
         check.set_active(chosen.borrow().contains(&app.id));
         check.update_property(&[gtk::accessible::Property::Label(&app.name)]);
         {
-            let (chosen, id, done) = (chosen.clone(), app.id.clone(), done.clone());
+            let (chosen, id, done, reverting) = (chosen.clone(), app.id.clone(), done.clone(), reverting.clone());
             check.connect_toggled(move |c| {
-                {
-                    let mut list = chosen.borrow_mut();
-                    if c.is_active() {
-                        if !list.contains(&id) {
-                            list.push(id.clone());
-                        }
-                    } else {
-                        list.retain(|x| *x != id);
-                    }
+                if reverting.get() {
+                    return;
                 }
-                done(chosen.borrow().clone());
+                let mut next = chosen.borrow().clone();
+                if c.is_active() {
+                    if !next.contains(&id) {
+                        next.push(id.clone());
+                    }
+                } else {
+                    next.retain(|x| *x != id);
+                }
+                if done(next.clone()) {
+                    *chosen.borrow_mut() = next;
+                } else {
+                    reverting.set(true);
+                    c.set_active(!c.is_active());
+                    reverting.set(false);
+                }
             });
         }
         b.append(&check);
@@ -551,6 +569,42 @@ pub fn app_picker(model: &Rc<Model>, selection: Vec<String>, done: impl Fn(Vec<S
 }
 
 // MARK: Dialogs
+
+/// A window's X11 id, once it has a surface.
+pub fn xid(window: &impl IsA<gtk::Widget>) -> Option<u32> {
+    window.as_ref().native()?.surface()?.downcast::<gdk4_x11::X11Surface>().ok().map(|s| s.xid() as u32)
+}
+
+/// Gives a window Kairos just presented the keyboard focus. present() alone is not enough when
+/// the request did not come with a fresh user timestamp, as with a global shortcut (it arrives on
+/// Kairos's own X connection, so GTK only has an old timestamp) or a tray or bridge request:
+/// Muffin's focus-stealing prevention then only marks the window as wanting attention, which
+/// shows nowhere while Kairos hides the panel. So the window is also activated as a pager
+/// would, which Muffin obeys, after moving it to the workspace on screen (Muffin ignores
+/// activation across workspaces). A window that was hidden is mapped a moment after present(),
+/// so it is activated again then.
+pub fn bring_to_front(x: Option<&Arc<X11>>, window: &impl IsA<gtk::Window>) {
+    let Some(x) = x.cloned() else { return };
+    let activate = move |w: &gtk::Window| {
+        if let Some(id) = xid(w) {
+            x.move_to_current_desktop(id);
+            x.activate(id);
+        }
+    };
+    let window: gtk::Window = window.as_ref().clone();
+    activate(&window);
+    let weak = window.downgrade();
+    glib::timeout_add_local_once(std::time::Duration::from_millis(150), move || {
+        if let Some(w) = weak.upgrade().filter(|w| w.is_visible()) {
+            activate(&w);
+        }
+    });
+}
+
+/// Every toplevel window this process has, to find the one a dialog just made.
+pub fn toplevels() -> Vec<gtk::Window> {
+    gtk::Window::toplevels().iter::<gtk::Window>().filter_map(Result::ok).collect()
+}
 
 pub fn main_window(model: &Rc<Model>) -> Option<gtk::Window> {
     let _ = model;
@@ -661,15 +715,12 @@ pub mod actions {
         );
     }
 
+    /// The picker writes to the group that was active when it opened, even if the owner
+    /// switches group while it is open.
     pub fn add_apps(model: &Rc<Model>) {
-        let current = model.s().active_group().map(|g| g.dock_apps.clone()).unwrap_or_default();
+        let Some((id, current)) = model.s().active_group().map(|g| (g.id, g.dock_apps.clone())) else { return };
         let m = model.clone();
-        app_picker(model, current, move |next| {
-            let active = m.s().data.focus.active_group_id;
-            if let Some(id) = active {
-                m.update_group(id, |g| g.dock_apps = next);
-            }
-        });
+        app_picker(model, current, move |next| m.set_group_apps(id, next, |g| &mut g.dock_apps));
     }
 
     pub fn edit_groups(model: &Rc<Model>, id: Option<Id>) {

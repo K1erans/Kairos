@@ -38,7 +38,7 @@ fn connect() -> Option<UnixStream> {
 
 fn main() {
     let Some(stream) = connect() else {
-        let msg = serde_json::json!({"type": "error", "message": "Kairos isn't running."});
+        let msg = serde_json::json!({"type": "error", "message": "Kairos Desktop is not running."});
         let _ = write_frame(&mut std::io::stdout().lock(), msg.to_string().as_bytes());
         std::process::exit(1);
     };

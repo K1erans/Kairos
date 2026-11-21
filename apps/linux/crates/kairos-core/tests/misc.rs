@@ -304,3 +304,45 @@ fn the_overlay_goes_to_the_monitor_showing_most_of_the_window() {
     assert_eq!(clearance::display_showing(&Rect::new(100.0, 100.0, 800.0, 600.0), &monitors), Some(1));
     assert_eq!(clearance::display_showing(&Rect::new(-5000.0, 0.0, 10.0, 10.0), &monitors), None);
 }
+
+// MARK: Regression tests for the 2026-11-21 review
+
+#[test]
+fn restore_script_quotes_saved_values_so_sh_runs_nothing_in_them() {
+    use kairos_core::panel::{restore_script, sh_quote, Saved};
+    for v in ["['1:false']", "$(echo injected)", "`id`", "a\\b", "it's", "'", "\"$HOME\""] {
+        let out = std::process::Command::new("sh").arg("-c").arg(format!("printf %s {}", sh_quote(v))).output().unwrap();
+        assert_eq!(String::from_utf8(out.stdout).unwrap(), v, "{v}");
+    }
+    let nasty = String::from("['1:$(id)`id`\\'']");
+    let s = restore_script(&Saved { autohide: nasty.clone(), show_delay: "['1:0']".into() });
+    assert!(s.contains(&format!("gsettings set org.cinnamon panels-autohide {}\n", sh_quote(&nasty))), "{s}");
+    assert!(s.contains("gsettings set org.cinnamon panels-show-delay '['\\''1:0'\\'']'\n"), "{s}");
+    assert!(s.contains("pgrep -u \"$(id -u)\" -x kairos"), "only this user's Kairos counts: {s}");
+    assert!(!s.contains("if pgrep -x kairos"));
+}
+
+#[test]
+fn browser_lists_know_snaps_flatpaks_and_other_channels() {
+    use kairos_core::browsers::{is_browser, is_chromium};
+    for id in [
+        "chromium_chromium.desktop",
+        "com.opera.Opera.desktop",
+        "brave-browser-beta.desktop",
+        "brave-browser-nightly.desktop",
+        "microsoft-edge-dev.desktop",
+        "vivaldi-snapshot.desktop",
+        "io.github.ungoogled_software.ungoogled_chromium.desktop",
+        "brave_brave.desktop",
+        "helium.desktop",
+    ] {
+        assert!(is_chromium(id), "{id}");
+    }
+    assert!(
+        kairos_core::bridge::BROWSER_DIRS.iter().any(|(_, d)| *d == "net.imput.helium/NativeMessagingHosts"),
+        "Kairos Shield in Helium needs the host manifest in Helium's own folder"
+    );
+    for id in ["firefox-developer-edition.desktop", "one.ablaze.floorp.desktop", "org.qutebrowser.qutebrowser.desktop"] {
+        assert!(is_browser(id) && !is_chromium(id), "{id}");
+    }
+}

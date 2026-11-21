@@ -346,3 +346,16 @@ fn a_done_or_deleted_task_does_not_come_back() {
     d.focus = d.focus_after_switch(wid);
     assert_eq!(d.focus.current_task_id, None);
 }
+
+#[test]
+fn an_app_override_marks_only_that_app_and_a_suffix_marks_nothing() {
+    let mut d = AppData::default();
+    d.log_block(ev("discord.desktop", Some("Discord"), "app", false, at(0.0)), at(0.0));
+    d.log_block(ev("steam.desktop", Some("Steam"), "app", false, at(0.0)), at(0.0));
+    d.log_block(ev("youtube.com", None, "rule", false, at(0.0)), at(0.0));
+    d.mark_overridden("desktop");
+    d.mark_overridden("com");
+    assert_eq!(d.block_events.iter().map(|e| e.overridden).collect::<Vec<_>>(), vec![false, false, false]);
+    d.mark_overridden("discord.desktop");
+    assert_eq!(d.block_events.iter().map(|e| e.overridden).collect::<Vec<_>>(), vec![true, false, false]);
+}

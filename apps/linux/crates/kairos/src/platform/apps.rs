@@ -249,10 +249,7 @@ impl Apps {
     pub fn open(&self, id: &str, running: &[RunningApp]) -> Result<(), String> {
         if let Some(app) = running.iter().find(|a| a.id == id) {
             if let Some(x) = &self.x {
-                // The most recent window last, so it ends up in front.
-                for w in &app.windows {
-                    x.activate(*w);
-                }
+                x.bring_forward(&app.windows);
                 return Ok(());
             }
         }

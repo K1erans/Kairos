@@ -152,18 +152,53 @@ impl Overlay {
                     let x = self.x.clone();
                     win.connect_realize(move |w| {
                         let Some(x) = &x else { return };
-                        if let Some(xid) = w.surface().and_then(|s| s.downcast::<gdk4_x11::X11Surface>().ok()).map(|s| s.xid() as u32) {
+                        if let Some(xid) = xid(w) {
                             x.make_overlay(xid, rest);
                         }
                     });
                 }
-                win.fullscreen();
+                {
+                    // GDK rewrites _NET_WM_STATE and _NET_WM_DESKTOP when it first maps the
+                    // window, dropping the above and sticky states set at realize, so the
+                    // overlay could open behind the app in front. Once Muffin manages the
+                    // window, ask it for them as a pager would.
+                    let x = self.x.clone();
+                    win.connect_map(move |w| {
+                        let Some(x) = x.clone() else { return };
+                        let weak = w.downgrade();
+                        for ms in [60, 400] {
+                            let (x, weak) = (x.clone(), weak.clone());
+                            glib::timeout_add_local_once(std::time::Duration::from_millis(ms), move || {
+                                if let Some(id) = weak.upgrade().filter(|w| w.is_mapped()).and_then(|w| xid(&w)) {
+                                    x.keep_above(id);
+                                }
+                            });
+                        }
+                    });
+                }
+                // The block overlay covers the monitor the blocked app was on.
+                match n.at.and_then(monitor_at) {
+                    Some(monitor) => win.fullscreen_on_monitor(&monitor),
+                    None => win.fullscreen(),
+                }
                 win.present();
                 *self.window.borrow_mut() = Some(win);
             }
             _ => {}
         }
     }
+}
+
+/// The monitor showing a point in root-window pixels.
+fn monitor_at((x, y): (f64, f64)) -> Option<gtk::gdk::Monitor> {
+    let display = gtk::gdk::Display::default()?;
+    let list = display.monitors();
+    (0..list.n_items()).filter_map(|i| list.item(i)?.downcast::<gtk::gdk::Monitor>().ok()).find(|m| {
+        // Monitor geometry is in GDK's logical pixels; X11 root coordinates are device pixels.
+        let g = m.geometry();
+        let k = m.scale_factor() as f64;
+        x >= g.x() as f64 * k && x < (g.x() + g.width()) as f64 * k && y >= g.y() as f64 * k && y < (g.y() + g.height()) as f64 * k
+    })
 }
 
 fn rest_text(s: &State) -> String {

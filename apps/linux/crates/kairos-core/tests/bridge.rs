@@ -186,3 +186,33 @@ fn the_socket_lives_in_the_data_folder() {
     let home = scratch_home();
     assert_eq!(kairos_core::bridge::socket_path(), home.join("bridge.sock"));
 }
+
+#[test]
+fn servers_starting_together_end_with_exactly_one_listening() {
+    let path = socket_path();
+    let servers: Vec<BridgeServer> = (0..8).map(|_| BridgeServer::new(path.clone())).collect();
+    let results: Vec<bool> = std::thread::scope(|scope| {
+        let handles: Vec<_> = servers.iter().map(|s| scope.spawn(move || s.start(Arc::new(|_| {})).is_ok())).collect();
+        handles.into_iter().map(|h| h.join().unwrap()).collect()
+    });
+    assert_eq!(results.iter().filter(|ok| **ok).count(), 1, "{results:?}");
+    assert!(is_listening(&path));
+    for s in &servers {
+        s.stop();
+    }
+}
+
+#[test]
+fn stopping_an_old_server_leaves_a_newer_servers_socket() {
+    let path = socket_path();
+    let old = BridgeServer::new(path.clone());
+    assert!(old.start(Arc::new(|_| {})).is_ok());
+    // The old server's socket goes away (as a crash of its listener would), and a new one binds.
+    std::fs::remove_file(&path).unwrap();
+    let new = BridgeServer::new(path.clone());
+    assert!(new.start(Arc::new(|_| {})).is_ok());
+    old.stop();
+    assert!(is_listening(&path), "the old server did not delete the new server's socket");
+    new.stop();
+    assert!(!path.exists());
+}

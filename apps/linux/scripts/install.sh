@@ -13,14 +13,50 @@ LIB="$HOME/.local/lib/kairos"
 BIN="$HOME/.local/bin"
 APPS="$HOME/.local/share/applications"
 ICONS="$HOME/.local/share/icons/hicolor/scalable/apps"
+CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}"
+
+# The PIDs of this user's running installed Kairos ($LIB/kairos), not dev or test copies.
+installed_pids() {
+  local want pid exe
+  want="$(realpath -m "$LIB/kairos")"
+  for pid in $(pgrep -u "$(id -u)" -x kairos || true); do
+    exe="$(readlink "/proc/$pid/exe" 2>/dev/null || true)"
+    if [[ "$exe" == "$want" || "$exe" == "$want (deleted)" ]]; then echo "$pid"; fi
+  done
+}
+
+# Asks the installed Kairos to quit and waits for it to exit: on the way out it puts Cinnamon's
+# panel back, which can take a few seconds, and a copy started before then would find the
+# instance lock held and exit. Returns 1 when none was running.
+stop_installed() {
+  local pids
+  pids="$(installed_pids)"
+  [[ -n "$pids" ]] || return 1
+  # shellcheck disable=SC2086
+  kill $pids 2>/dev/null || true
+  for _ in $(seq 1 150); do
+    [[ -z "$(installed_pids)" ]] && return 0
+    sleep 0.1
+  done
+  echo "warning: Kairos did not quit within 15 seconds" >&2
+  return 0
+}
 
 if [[ "${1:-}" == "--uninstall" ]]; then
-  pkill -x kairos 2>/dev/null || true
-  "$LIB/kairos" --restore-panel 2>/dev/null || true
-  rm -rf "$LIB" "$BIN/kairos" "$APPS/kairos.desktop" "$ICONS/kairos.svg" "$HOME/.config/autostart/kairos.desktop"
-  for d in google-chrome google-chrome-beta google-chrome-unstable chromium BraveSoftware/Brave-Browser microsoft-edge microsoft-edge-beta vivaldi; do
-    rm -f "$HOME/.config/$d/NativeMessagingHosts/com.kairos.host.json"
-  done
+  stop_installed || true
+  if [[ -x "$LIB/kairos" ]]; then
+    "$LIB/kairos" --restore-panel 2>/dev/null || true
+  fi
+  # The same browser list and config folder the app installs to. A Kairos older than
+  # --uninstall-bridge would start its window on an unknown flag, so look for it first.
+  if [[ -x "$LIB/kairos" ]] && grep -qa -- "--uninstall-bridge" "$LIB/kairos"; then
+    "$LIB/kairos" --uninstall-bridge 2>/dev/null || true
+  else
+    for d in google-chrome google-chrome-beta google-chrome-unstable chromium BraveSoftware/Brave-Browser microsoft-edge microsoft-edge-beta vivaldi opera; do
+      rm -f "$CONFIG/$d/NativeMessagingHosts/com.kairos.host.json"
+    done
+  fi
+  rm -rf "$LIB" "$BIN/kairos" "$APPS/kairos.desktop" "$ICONS/kairos.svg" "$CONFIG/autostart/kairos.desktop"
   echo "Kairos removed. Your data is still in ${XDG_DATA_HOME:-$HOME/.local/share}/kairos."
   exit 0
 fi
@@ -37,7 +73,7 @@ command -v cargo >/dev/null || { echo "Rust is needed: https://rustup.rs" >&2; e
 (cd "$HERE" && cargo build --release -p kairos -p kairos-host)
 
 running=0
-if pgrep -x kairos >/dev/null; then running=1; pkill -x kairos; sleep 1; fi
+if stop_installed; then running=1; fi
 
 mkdir -p "$LIB/resources/extensions" "$BIN" "$APPS" "$ICONS"
 install -m 755 "$HERE/target/release/kairos" "$LIB/kairos"

@@ -30,7 +30,7 @@ The two platforms use the same idea: save the owner's setting, apply Kairos's ow
 | --- | --- | --- |
 | The setting | `com.apple.dock` `autohide`, `autohide-delay` 1000, `static-only` | `org.cinnamon` `panels-autohide` (every panel `:true`), `panels-show-delay` 2000 |
 | Saved values | `systemDockSaved` in UserDefaults | `panel-saved.json` in the data folder |
-| Restore script | `dock-restore.sh`. It removes itself and the saved values. | `restore-panel.sh`. It removes `panel-saved.json` and **stays on disk**. It begins with its own `pgrep -x kairos` check. |
+| Restore script | `dock-restore.sh`. It removes itself and the saved values. | `restore-panel.sh`. It removes `panel-saved.json` and **stays on disk**. It begins with its own `pgrep -u "$(id -u)" -x kairos` check (this user's Kairos only). |
 | Watchdog | A LaunchAgent, every 15 s. It is installed while the switch is on, even with the bar hidden. | The `kairos-panel-watchdog` systemd user timer, every 30 s. `replace()` installs it and `restore()` removes it. |
 | When Kairos acts | Two Combine sinks fire on a change to `hidesSystemDock` / `replacesSystemDock` | `sync_panel()` runs at launch and on **every** DATA change. It does nothing when the wanted state matches both `panel_hidden` (in memory) and `is_replaced()` (the file exists). |
 | `replace()` with values already saved | Rewrites the script and leaves the Dock as it is | Rewrites the script and hides the panel again |
@@ -108,6 +108,8 @@ Kairos is now running with the panel hidden and nothing saved. Deleting the file
 These are the two bugs fixed on the Mac on 2026-11-10 (commit 4d36cb8), and the Rust port does not have either fix. The script race in steps 2-4 above, and the script that stays after running, are Linux-only. A plain port of the Mac fix is not enough: with `RecoversFromScript`, `RefusesOwnValues` and `ScriptRemovesItself` but no `ScriptLocked`, the same race still deletes the newly written script along with `panel-saved.json`. That is the `no-lock` run.
 
 Last confirmed in sync: 2026-11-21, recorded in `synced-linux.sha256`. That `main.rs` includes another agent's uncommitted single-instance lock (`kairos.lock`), which makes "one Kairos at a time" true and does not touch the panel code. Both files were read side by side with the model.
+
+`panel.rs` re-read and its checksum alone updated on 2026-11-21 after two changes to the script: every saved value and path is single-quoted (a `$`, backtick or `\` in a gsettings value is no longer run or expanded by sh), and the check is `pgrep -u "$(id -u)" -x kairos`, so another user's Kairos no longer stops it. The script's steps and their order (lock, check, two `gsettings set`, `rm` of the saved values, stop the timer, `rm "$0"`) are unchanged, so the model is too; all five properties hold and every mutant still fails. A scratch copy (`KAIROS_HOME` set) run by the same user still counts as running. `main.rs` was left out of that update because another agent is editing it.
 
 ## Not covered
 

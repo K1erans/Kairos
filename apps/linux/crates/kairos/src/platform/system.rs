@@ -68,6 +68,33 @@ pub mod bridge_installer {
     pub fn installed_browsers() -> Vec<String> {
         kairos_core::bridge::installed_browsers(&host_path())
     }
+
+    /// Removes the native messaging manifest from every browser `install` writes to (the same
+    /// list and config folder), when it points at this copy's host or at a host that is gone.
+    /// Never from a scratch copy. Returns the browsers it was removed from.
+    pub fn uninstall() -> Vec<String> {
+        if store::is_scratch() {
+            return vec![];
+        }
+        let host = host_path();
+        let config = store::config_dir();
+        let mut done = vec![];
+        for (name, dir) in kairos_core::bridge::BROWSER_DIRS {
+            let file = config.join(dir).join(format!("{}.json", kairos_core::bridge::HOST_NAME));
+            let Ok(data) = std::fs::read(&file) else { continue };
+            let points_at = serde_json::from_slice::<serde_json::Value>(&data)
+                .ok()
+                .and_then(|v| v.get("path").and_then(|p| p.as_str()).map(PathBuf::from));
+            let ours = match points_at {
+                Some(p) => p == host || !p.exists(),
+                None => true, // Unreadable: not a manifest anything can use.
+            };
+            if ours && std::fs::remove_file(&file).is_ok() {
+                done.push(name.to_string());
+            }
+        }
+        done
+    }
 }
 
 pub mod autostart {
@@ -81,14 +108,29 @@ pub mod autostart {
         std::fs::read_to_string(path()).map(|s| !s.contains("Hidden=true") && !s.contains("X-GNOME-Autostart-enabled=false")).unwrap_or(false)
     }
 
+    /// An entry written by an older Kairos opened the main window at login; this one starts in
+    /// the background. Rewrites an old entry that is on.
+    pub fn upgrade() {
+        if store::is_scratch() || !enabled() {
+            return;
+        }
+        let current = std::fs::read_to_string(path()).unwrap_or_default();
+        // Only an entry that starts this copy, so a test build never takes over login.
+        let exe = format!("Exec=\"{}\"", exe_dir().join("kairos").display());
+        if current.contains(&exe) && !current.contains("--background") {
+            set(true);
+        }
+    }
+
     pub fn set(on: bool) {
         if store::is_scratch() {
             return;
         }
         if on {
+            // --background: at login Kairos starts in the tray and Kairos Bar, without its window.
             let exe = exe_dir().join("kairos");
             let entry = format!(
-                "[Desktop Entry]\nType=Application\nName=Kairos\nComment=Focus, tasks and app groups\nExec=\"{}\"\nIcon=kairos\nX-GNOME-Autostart-enabled=true\nNoDisplay=false\n",
+                "[Desktop Entry]\nType=Application\nName=Kairos\nComment=Focus, tasks and app groups\nExec=\"{}\" --background\nIcon=kairos\nX-GNOME-Autostart-enabled=true\nNoDisplay=false\n",
                 exe.display()
             );
             let _ = std::fs::create_dir_all(path().parent().unwrap());

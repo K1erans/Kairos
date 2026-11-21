@@ -464,3 +464,12 @@ fn jev_is_not_told_a_browsers_page_title() {
     assert_eq!(privacy::app_subject("Firefox", "firefox.desktop", "My Bank").title, "");
     assert_eq!(privacy::app_subject("Text Editor", "xed.desktop", "Draft").title, "Draft");
 }
+
+#[test]
+fn extract_html_keeps_byte_positions_with_text_that_grows_when_lower_cased() {
+    // `İ` is two bytes but lower-cases to three, which used to shift the slice and panic.
+    let raw = "İİİİ<!DOCTYPE html><html><body>x</body></HTML> İ";
+    assert_eq!(scenes::extract_html(raw).unwrap(), "<!DOCTYPE html><html><body>x</body></HTML>");
+    assert_eq!(scenes::extract_html("ẞİ <HTML>İ</html>").unwrap(), "<HTML>İ</html>");
+    assert!(scenes::extract_html("İİİİ").is_err());
+}

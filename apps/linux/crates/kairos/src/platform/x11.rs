@@ -249,6 +249,29 @@ impl X11 {
         self.client_message(w, self.atoms._NET_ACTIVE_WINDOW, [2, CURRENT_TIME, 0, 0, 0]);
     }
 
+    /// The workspace a window is on (0-based), or None when it is on all of them.
+    fn desktop_of(&self, w: Window) -> Option<u32> {
+        self.prop32(w, self.atoms._NET_WM_DESKTOP).first().copied().filter(|d| *d != 0xFFFF_FFFF)
+    }
+
+    /// Brings an app's windows forward as a Dock click does: those on the workspace on screen,
+    /// or if none are there, the last window's workspace is switched to and its windows there
+    /// come forward. Asked to activate a window on another workspace, Muffin only marks it as
+    /// wanting attention, which shows nowhere while Kairos hides Cinnamon's panel.
+    pub fn bring_forward(&self, windows: &[Window]) {
+        let current = self.current_desktop();
+        let mut chosen: Vec<Window> = windows.iter().copied().filter(|w| self.desktop_of(*w).map_or(true, |d| d == current)).collect();
+        if chosen.is_empty() {
+            let Some(desktop) = windows.last().and_then(|w| self.desktop_of(*w)) else { return };
+            self.client_message(self.root, self.atoms._NET_CURRENT_DESKTOP, [desktop, CURRENT_TIME, 0, 0, 0]);
+            chosen = windows.iter().copied().filter(|w| self.desktop_of(*w) == Some(desktop)).collect();
+        }
+        // The most recent window last, so it ends up in front.
+        for w in chosen {
+            self.activate(w);
+        }
+    }
+
     /// Moves a window to the workspace on screen, as a pager would.
     pub fn move_to_current_desktop(&self, w: Window) {
         self.client_message(w, self.atoms._NET_WM_DESKTOP, [self.current_desktop(), 2, 0, 0, 0]);

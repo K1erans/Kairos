@@ -404,3 +404,68 @@ fn scratch_keys_round_trip() {
     assert_eq!(keys.get("typesafe").as_deref(), Some("ts-test"));
     let _ = std::fs::remove_dir_all(dir);
 }
+
+#[test]
+fn a_file_that_cannot_be_read_is_never_saved_over() {
+    // A folder where the file should be fails to read with something other than NotFound.
+    let (dir, store) = temp_store("unreadable");
+    std::fs::create_dir_all(&store.path).unwrap();
+    let loaded = store.load(starter);
+    assert_eq!(loaded.groups.len(), 3, "starter data so Kairos can still open");
+    assert!(store.is_read_only());
+    assert!(store.problem().unwrap().contains("won\u{2019}t save over it"));
+    let err = store.save(&loaded).unwrap_err();
+    assert_eq!(err.kind(), std::io::ErrorKind::PermissionDenied);
+    assert!(store.path.is_dir(), "left alone");
+    assert!(matches!(DataStore::new(store.path.clone()).try_load(starter), Err(store::LoadError::Unreadable(_))));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn an_unreadable_file_keeps_its_contents_after_a_save() {
+    use std::os::unix::fs::PermissionsExt;
+    let (dir, store) = temp_store("noperm");
+    std::fs::write(&store.path, b"{\"the owner's\": \"data\"}").unwrap();
+    std::fs::set_permissions(&store.path, std::fs::Permissions::from_mode(0o000)).unwrap();
+    if std::fs::read(&store.path).is_ok() {
+        // Running as root: permissions don't stop the read, so there is nothing to test.
+        let _ = std::fs::remove_dir_all(dir);
+        return;
+    }
+    let loaded = store.load(starter);
+    assert!(store.save(&loaded).is_err());
+    std::fs::set_permissions(&store.path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    assert_eq!(std::fs::read(&store.path).unwrap(), b"{\"the owner's\": \"data\"}");
+    store.allow_overwrite();
+    assert!(store.save(&loaded).is_ok(), "the owner can choose to replace it");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn a_missing_file_gives_starter_data_and_saves_normally() {
+    let (dir, store) = temp_store("missing");
+    assert!(store.try_load(starter).is_ok());
+    assert!(!store.is_read_only());
+    assert!(store.save(&starter()).is_ok());
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn a_corrupt_file_whose_copy_cannot_be_written_is_never_saved_over() {
+    use std::os::unix::fs::PermissionsExt;
+    let (dir, store) = temp_store("nobackup");
+    std::fs::write(&store.path, b"not json").unwrap();
+    // A read-only folder: the file can be read but no copy can be written beside it.
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o500)).unwrap();
+    let writable = std::fs::write(dir.join("probe"), b"").is_ok();
+    let result = store.try_load(starter);
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+    if writable {
+        let _ = std::fs::remove_dir_all(dir); // root
+        return;
+    }
+    assert!(matches!(result, Err(store::LoadError::BackupFailed(_))));
+    assert!(store.save(&starter()).is_err());
+    assert_eq!(std::fs::read(&store.path).unwrap(), b"not json", "the only copy is still there");
+    let _ = std::fs::remove_dir_all(dir);
+}

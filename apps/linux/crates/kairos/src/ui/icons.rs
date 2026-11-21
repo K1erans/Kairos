@@ -65,20 +65,21 @@ fn load(icon: &gio::Icon, px: i32) -> Option<Pixbuf> {
     Pixbuf::from_file_at_scale(path, px, px, true).ok()
 }
 
-/// An image for an app or folder icon, `px` pixels square, cached.
-pub fn pixbuf(key: &str, icon: Option<gio::Icon>, px: i32) -> Option<Pixbuf> {
+/// An image for an app or folder icon, `px` pixels square, cached by `key`. `icon` runs only on
+/// a miss: finding an app's icon parses its .desktop file, and Kairos Bar draws every frame.
+pub fn pixbuf(key: &str, icon: impl FnOnce() -> Option<gio::Icon>, px: i32) -> Option<Pixbuf> {
     let k = (key.to_string(), px);
     if let Some(hit) = CACHE.with(|c| c.borrow().get(&k).cloned()) {
         return hit;
     }
-    let icon = icon.unwrap_or_else(|| gio::ThemedIcon::new("application-x-executable").upcast());
+    let icon = icon().unwrap_or_else(|| gio::ThemedIcon::new("application-x-executable").upcast());
     let pb = load(&icon, px).or_else(|| load(&gio::ThemedIcon::new("application-x-executable").upcast(), px));
     CACHE.with(|c| c.borrow_mut().insert(k, pb.clone()));
     pb
 }
 
 pub fn named(name: &str, px: i32) -> Option<Pixbuf> {
-    pixbuf(&format!("icon:{name}"), Some(gio::ThemedIcon::new(name).upcast()), px)
+    pixbuf(&format!("icon:{name}"), || Some(gio::ThemedIcon::new(name).upcast()), px)
 }
 
 pub fn forget(key_prefix: &str) {
