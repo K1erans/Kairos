@@ -42,7 +42,7 @@ fn open_apps_not_pinned_follow_a_separator() {
     let r = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
     let slots = DockGeometry::slots_for(&data, &r(&["b", "x", "a", "y", "x"]));
     assert_eq!(slots[slots.len() - 5..].to_vec(), vec![app("a"), app("b"), Slot::Separator, running("x"), running("y")]);
-    assert!(!DockGeometry::slots_for(&data, &r(&["a"])).contains(&Slot::Separator));
+    assert_eq!(DockGeometry::slots_for(&data, &r(&["a"])).last(), Some(&app("b")), "no separator when every open app is pinned");
     assert!(!Slot::Separator.magnifies());
     data.groups[0].dock_apps.clear();
     let slots = DockGeometry::slots_for(&data, &r(&["x"]));
@@ -54,6 +54,7 @@ fn slots_offer_new_group_and_add_app_for_an_empty_group() {
     let mut data = starter();
     data.settings.shows_dock_folders = false;
     let slots = DockGeometry::slots_for(&data, &[]);
+    assert_eq!(slots[..2].to_vec(), vec![Slot::Kairos, Slot::Separator], "Kairos opens from the bar's leading end");
     assert_eq!(slots.iter().filter(|s| **s == Slot::NewGroup).count(), 1);
     assert!(!slots.contains(&Slot::AddApp));
     data.groups[0].dock_apps.clear();
@@ -83,12 +84,29 @@ fn switching_groups_shows_only_their_pinned_apps_on_the_bar_by_default() {
     data.groups[1].dock_apps = vec!["study".into(), "shared".into()];
     data.settings.shows_dock_folders = false;
     let running: Vec<String> = ["work", "study", "shared", "other"].iter().map(|s| s.to_string()).collect();
-    let n = data.groups.len() + 2;
+    let n = data.groups.len() + 4;
     let work = DockGeometry::slots_for(&data, &running);
     assert_eq!(work[n..].to_vec(), vec![app("work"), app("shared")]);
     data.focus = data.focus_after_switch(data.groups[1].id);
     let study = DockGeometry::slots_for(&data, &running);
     assert_eq!(study[n..].to_vec(), vec![app("study"), app("shared")]);
+}
+
+#[test]
+fn a_group_can_leave_other_apps_alone_when_settings_hide_them() {
+    let mut data = starter();
+    data.settings.switch_behavior = SwitchBehavior::Hide;
+    data.settings.shows_dock_folders = false;
+    data.groups[0].dock_apps = vec!["notes".into()];
+    data.groups[1].dock_apps = vec!["mail".into()];
+    data.groups[1].switch_behavior = Some(SwitchBehavior::Leave);
+    let open: Vec<String> = vec!["game".into()];
+    data.focus.active_group_id = Some(data.groups[0].id);
+    assert_eq!(data.active_switch_behavior(), SwitchBehavior::Hide);
+    assert!(!DockGeometry::slots_for(&data, &open).contains(&running("game")));
+    data.focus = data.focus_after_switch(data.groups[1].id);
+    assert_eq!(data.active_switch_behavior(), SwitchBehavior::Leave);
+    assert!(DockGeometry::slots_for(&data, &open).contains(&running("game")));
 }
 
 #[test]

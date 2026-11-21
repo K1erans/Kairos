@@ -84,6 +84,9 @@ pub struct AppGroup {
     pub tempo_preset: String,
     /// Workspace (1-9) to switch to with this group. 0 leaves the workspace alone.
     pub desktop: i32,
+    /// What switching to this group does to other apps. None follows Settings.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub switch_behavior: Option<SwitchBehavior>,
 }
 
 impl AppGroup {
@@ -102,6 +105,7 @@ impl AppGroup {
             jev_threshold: 0.7,
             tempo_preset: "Classic".into(),
             desktop: 0,
+            switch_behavior: None,
         }
     }
 
@@ -135,6 +139,7 @@ lenient!(AppGroup, AppGroup::new(""), {
     field "dockApps" => dock_apps, field "blockedApps" => blocked_apps, field "allowSites" => allow_sites,
     field "blockSites" => block_sites, field "hiddenElements" => hidden_elements, field "jevEnabled" => jev_enabled,
     field "jevThreshold" => jev_threshold, field "tempoPreset" => tempo_preset, field "desktop" => desktop,
+    opt "switchBehavior" => switch_behavior,
 });
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
@@ -640,6 +645,12 @@ impl AppData {
 
     pub fn active_group(&self) -> Option<&AppGroup> {
         self.group(self.focus.active_group_id).or_else(|| self.groups.first())
+    }
+
+    /// What switching to the active group does to other apps: the group's own choice, or
+    /// Settings' when it has none.
+    pub fn active_switch_behavior(&self) -> SwitchBehavior {
+        self.active_group().and_then(|g| g.switch_behavior).unwrap_or(self.settings.switch_behavior)
     }
 
     pub fn current_task(&self) -> Option<&TaskItem> {

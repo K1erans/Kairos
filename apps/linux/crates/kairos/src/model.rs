@@ -383,7 +383,7 @@ impl Model {
     pub fn edit(self: &Rc<Self>, f: impl FnOnce(&mut AppData)) {
         let before = {
             let s = self.state.borrow();
-            Before { mode: s.data.focus.mode, active_group: s.data.active_group().map(|g| g.id), switch_behavior: s.data.settings.switch_behavior }
+            Before { mode: s.data.focus.mode, active_group: s.data.active_group().map(|g| g.id), switch_behavior: s.data.active_switch_behavior() }
         };
         f(&mut self.state.borrow_mut().data);
         self.data_changed(before);
@@ -435,7 +435,7 @@ impl Model {
     fn data_changed(self: &Rc<Self>, before: Before) {
         let (mode, group, behavior) = {
             let s = self.s();
-            (s.data.focus.mode, s.data.active_group().map(|g| g.id), s.data.settings.switch_behavior)
+            (s.data.focus.mode, s.data.active_group().map(|g| g.id), s.data.active_switch_behavior())
         };
         if before.mode != mode {
             self.mode_changed(before.mode, mode);
@@ -1165,7 +1165,7 @@ impl Model {
         let list = self.apps.running();
         let policy = {
             let s = self.s();
-            GroupSwitch::new(s.active_group(), s.data.settings.switch_behavior)
+            GroupSwitch::new(s.active_group(), s.data.active_switch_behavior())
         };
         let entries: Vec<VisibilityApp<String>> = list.iter().map(|a| VisibilityApp { app: a.key(), app_id: Some(a.id.as_str()), is_hidden: a.hidden }).collect();
         self.visibility.borrow_mut().apply(&policy, &entries, &mut |k| self.hide_key(&list, k), &mut |k| self.unhide_key(&list, k));

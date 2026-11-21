@@ -174,6 +174,7 @@ fn samples() -> Vec<Sample> {
     group.jev_threshold = 0.4;
     group.tempo_preset = "Sprint".into();
     group.desktop = 2;
+    group.switch_behavior = Some(SwitchBehavior::Leave);
     let mut task = TaskItem::new("Write", Some(Id::new()));
     task.notes = "n".into();
     task.priority = 2;

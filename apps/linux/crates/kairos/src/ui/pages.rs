@@ -784,6 +784,20 @@ fn group_detail(model: &Rc<Model>, g: &AppGroup) -> gtk::Widget {
     if g.desktop > 0 {
         form.append(&caption(&format!("Switching to {} also moves to workspace {}. Add workspaces in System Settings > Workspaces if there are fewer.", g.name, g.desktop)));
     }
+    {
+        // Index 0 follows Settings; the rest are SwitchBehavior::ALL in order.
+        let default = s.data.settings.switch_behavior.label();
+        let options: Vec<String> = std::iter::once(format!("As in Settings ({})", default.to_lowercase()))
+            .chain(SwitchBehavior::ALL.iter().map(|b| b.label().to_string()))
+            .collect();
+        let cur = g.switch_behavior.and_then(|b| SwitchBehavior::ALL.iter().position(|x| *x == b)).map_or(0, |i| i + 1);
+        let m = model.clone();
+        form.append(&labeled("Other apps", &dropdown(&options, cur, move |i| {
+            let next = if i == 0 { None } else { SwitchBehavior::ALL.get(i - 1).copied() };
+            m.update_group(id, |g| g.switch_behavior = next);
+        })));
+        form.append(&caption(&format!("What switching to {} does to the windows of other apps.", g.name)));
+    }
     b.append(&form_outer);
 
     let look = vbox(6);
@@ -1140,6 +1154,7 @@ fn settings(model: &Rc<Model>) -> gtk::Widget {
         SwitchBehavior::HideBlocked => sec.append(&caption("Switching to a group minimises its blocked apps, even with the timer off. Choose them under Rules > Blocked apps. Kairos restores their windows when you switch to a group that allows them.")),
         SwitchBehavior::Leave => {}
     }
+    sec.append(&caption("A group can choose differently under Groups > Other apps."));
     sec.append(&hotkey_picker(model, "Quick add", hotkeys::QUICK_ADD, &st.quick_add_hotkey, |d, v| d.settings.quick_add_hotkey = v));
     sec.append(&hotkey_picker(model, "Start or pause the timer", hotkeys::TIMER, &st.timer_hotkey, |d, v| d.settings.timer_hotkey = v));
     sec.append(&switch_row(

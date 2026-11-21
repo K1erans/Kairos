@@ -553,6 +553,12 @@ impl KairosBar {
                 cr.push_group();
             }
             match &p.slot {
+                Slot::Kairos => {
+                    let px = (size * self.scale()).round() as i32;
+                    if let Some(pb) = icons::named("kairos", px.max(16)) {
+                        paint_pixbuf(cr, &pb, cx - size / 2.0, cy - size / 2.0, size, 1.0);
+                    }
+                }
                 Slot::Group(id) => {
                     if let Some(group) = s.data.group(Some(*id)) {
                         let (r, gg, b) = icons::rgb(&group.color_hex);
@@ -826,6 +832,7 @@ impl KairosBar {
     fn click(self: &Rc<Self>, slot: &Slot) {
         let m = self.model.clone();
         match slot.clone() {
+            Slot::Kairos => glib::idle_add_local_once(move || show_main_window(&m)),
             Slot::Group(id) => glib::idle_add_local_once(move || m.switch_group(id)),
             Slot::NewGroup => glib::idle_add_local_once(move || actions::new_group(&m)),
             Slot::AddApp => glib::idle_add_local_once(move || actions::add_apps(&m)),
@@ -859,6 +866,11 @@ impl KairosBar {
             group.add_action(&a);
         };
         match slot.clone() {
+            Slot::Kairos => {
+                menu.append(Some("Open Kairos"), Some("bar.open"));
+                let mm = m.clone();
+                add("open", Box::new(move || show_main_window(&mm)));
+            }
             Slot::Group(id) => {
                 let active = m.s().data.focus.active_group_id == Some(id);
                 if !active {
@@ -984,10 +996,7 @@ impl KairosBar {
         let mm = m.clone();
         add("settings", Box::new(move || {
             mm.set(change::NAV, |s| s.page = crate::model::Page::Settings);
-            let show = mm.hooks.borrow().show_main_window.clone();
-            if let Some(f) = show {
-                f();
-            }
+            show_main_window(&mm);
         }));
         menu.append_section(None, &settings);
         self.area.insert_action_group("bar", Some(&group));
@@ -1015,6 +1024,13 @@ impl KairosBar {
     }
 }
 
+fn show_main_window(model: &Model) {
+    let show = model.hooks.borrow().show_main_window.clone();
+    if let Some(f) = show {
+        f();
+    }
+}
+
 fn mm_launch(id: &str) -> Result<(), String> {
     let info = Apps::info(id).ok_or("not found")?;
     let ctx = gdk::Display::default().map(|d| d.app_launch_context());
@@ -1037,6 +1053,7 @@ fn empty_trash() {
 
 fn slot_name(model: &Model, data: &AppData, slot: &Slot) -> Option<String> {
     Some(match slot {
+        Slot::Kairos => "Kairos".into(),
         Slot::Group(id) => data.group(Some(*id))?.name.clone(),
         Slot::NewGroup => "New Group".into(),
         Slot::App(id) | Slot::Running(id) => model.apps.name(id),
