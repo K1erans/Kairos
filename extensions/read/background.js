@@ -304,15 +304,16 @@ async function loadFromTab(tab, { autoplay = true, onlyIfArticle = false, loadId
 
 async function loadActiveTab({ autoplay = true } = {}) {
   const loadId = beginLoad();
+  let tab;
   try {
-    const tab = await activeTab();
-    if (!isLoadCurrent(loadId)) return false;
-    return await loadFromTab(tab, { autoplay, loadId });
+    tab = await activeTab();
   } catch (err) {
     if (!isLoadCurrent(loadId)) return false;
     finishLoad(loadId);
     throw err;
   }
+  if (!isLoadCurrent(loadId)) return false;
+  return loadFromTab(tab, { autoplay, loadId });
 }
 
 // Only one offscreen document may exist, so parses run one at a time.
