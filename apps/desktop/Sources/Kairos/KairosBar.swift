@@ -1108,7 +1108,9 @@ private struct DockDropTarget: DropDelegate {
             ids.forEach { model.addDockApp($0) }
         case let .open(urls, app):
             guard let appURL = Apps.running(app)?.bundleURL ?? Apps.url(app) else { return }
-            NSWorkspace.shared.open(urls, withApplicationAt: appURL, configuration: NSWorkspace.OpenConfiguration())
+            NSWorkspace.shared.open(urls, withApplicationAt: appURL, configuration: NSWorkspace.OpenConfiguration()) { _, error in
+                if let error { NSLog("Kairos: opening dropped files in %@ failed: %@", app, String(describing: error)) }
+            }
         case let .moveToTrash(urls):
             NSWorkspace.shared.recycle(urls) { _, _ in
                 DispatchQueue.main.async { tracker.trashFull = Folders.trashIsFull }
