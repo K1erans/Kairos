@@ -9,7 +9,7 @@
   "action": { "default_title": "Kairos Read", "default_icon": { "16": "icons/icon16.png", "48": "icons/icon48.png" } },
   "background": { "service_worker": "background.js", "type": "module" },
   "side_panel": { "default_path": "sidepanel.html" },
-  "permissions": ["tts", "sidePanel", "storage", "unlimitedStorage", "contextMenus", "offscreen", "nativeMessaging", "scripting", "activeTab", "tabs"],
+  "permissions": ["tts", "sidePanel", "storage", "unlimitedStorage", "contextMenus", "offscreen", "nativeMessaging", "scripting", "activeTab", "tabs", "alarms"],
   "host_permissions": ["<all_urls>"],
   "commands": {
     "toggle-read": { "suggested_key": { "default": "Alt+R" }, "description": "Read this article / pause" },

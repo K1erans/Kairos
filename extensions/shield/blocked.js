@@ -1,7 +1,10 @@
 import { formatTimeLeft, hostnameOf, minutesText } from "./lib/match.js";
 import { originalUrlFromHash } from "./lib/rules.js";
 
-const original = originalUrlFromHash(location.hash);
+// blocked.html is web accessible, so a site can also put it in a frame and use its buttons. Inside a
+// frame it does nothing: frames of blocked sites are not loaded at all, so this is never real.
+const framed = window.top !== window;
+const original = framed ? "" : originalUrlFromHash(location.hash);
 const host = hostnameOf(original);
 const $ = (id) => document.getElementById(id);
 let info = null;
@@ -49,29 +52,41 @@ async function refresh() {
   render();
 }
 
-$("back").addEventListener("click", () => ask({ type: "goBack" }));
-$("allow").addEventListener("click", () => {
-  $("form").hidden = false;
-  $("reason").focus();
-});
-$("form").addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const reason = $("reason").value.trim();
-  if (!reason) {
-    $("note").textContent = "Type a reason first.";
-    return;
-  }
-  $("note").textContent = "Checking…";
-  const result = await ask({ type: "override", target: host, reason });
-  if (result && result.allowed && original && wasBlocked) location.replace(original);
-  else $("note").textContent = (result && result.message) || "Not allowed.";
-});
+function refuseFramed() {
+  document.querySelector("main").replaceChildren();
+  const note = document.createElement("p");
+  note.textContent = "Kairos Shield's block page does not work inside another page.";
+  document.querySelector("main").append(note);
+}
 
-chrome.runtime.onMessage.addListener((msg) => {
-  if (msg && msg.type === "page.update") refresh();
-});
-setInterval(() => {
-  if (info) $("time").textContent = formatTimeLeft(info.endsAt);
-}, 1000);
+function start() {
+  $("back").addEventListener("click", () => ask({ type: "goBack" }));
+  $("allow").addEventListener("click", () => {
+    $("form").hidden = false;
+    $("reason").focus();
+  });
+  $("form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const reason = $("reason").value.trim();
+    if (!reason) {
+      $("note").textContent = "Type a reason first.";
+      return;
+    }
+    $("note").textContent = "Checking…";
+    const result = await ask({ type: "override", target: host, reason });
+    if (result && result.allowed && original && wasBlocked) location.replace(original);
+    else $("note").textContent = (result && result.message) || "Not allowed.";
+  });
 
-refresh();
+  chrome.runtime.onMessage.addListener((msg) => {
+    if (msg && msg.type === "page.update") refresh();
+  });
+  setInterval(() => {
+    if (info) $("time").textContent = formatTimeLeft(info.endsAt);
+  }, 1000);
+
+  refresh();
+}
+
+if (framed) refuseFramed();
+else start();

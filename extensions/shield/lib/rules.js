@@ -15,8 +15,16 @@ import {
 export const RULE_ID_BLOCK = 1;
 export const RULE_ID_ALLOW = 2;
 export const RULE_ID_TEMP_ALLOW = 3;
+export const RULE_ID_BLOCK_FRAME = 4;
 export const JEV_CACHE_MS = 24 * 60 * 60 * 1000;
-export const JEV_TIMEOUT_MS = 2000;
+/**
+ * How long a page waits for Jev before the app's fail-closed setting decides. Kairos Desktop gives
+ * its own Jev call 2 s and then answers with that setting itself, so this only runs out when the
+ * app is stuck; the answer is still applied when it arrives.
+ */
+export const JEV_TIMEOUT_MS = 8000;
+/** How long a Jev answer is still waited for (and applied late) after JEV_TIMEOUT_MS. */
+export const JEV_LATE_MS = 60_000;
 export const EXCERPT_WORDS = 500;
 
 /** Built-in element presets, merged with the group's hiddenElements. */
@@ -52,8 +60,10 @@ function cleanDomains(entries) {
 
 /**
  * Dynamic declarativeNetRequest rules for a state.
- * Block = redirect of main-frame loads to the packaged block page with the original URL in the hash.
- * Allow list (priority 2) and unexpired temporary allows (priority 3) outrank the block (priority 1).
+ * Block = redirect of main-frame loads to the packaged block page with the original URL in the hash,
+ * and frames of a blocked site (an embedded video) are not loaded at all: the block page refuses to
+ * work inside a frame. Allow list (priority 2) and unexpired temporary allows (priority 3) outrank
+ * the blocks (priority 1).
  */
 export function buildDnrRules(state, { blockedPageUrl, now = Date.now() }) {
   if (!state || !modeUsesSiteRules(state.mode)) return [];
@@ -66,13 +76,19 @@ export function buildDnrRules(state, { blockedPageUrl, now = Date.now() }) {
     action: { type: "redirect", redirect: { regexSubstitution: `${blockedPageUrl}#\\1` } },
     condition: { regexFilter: "^(https?://.+)$", requestDomains: block, resourceTypes: ["main_frame"] },
   });
+  rules.push({
+    id: RULE_ID_BLOCK_FRAME,
+    priority: 1,
+    action: { type: "block" },
+    condition: { requestDomains: block, resourceTypes: ["sub_frame"] },
+  });
   const allow = cleanDomains(state.rules.allowSites);
   if (allow.length) {
     rules.push({
       id: RULE_ID_ALLOW,
       priority: 2,
       action: { type: "allow" },
-      condition: { requestDomains: allow, resourceTypes: ["main_frame"] },
+      condition: { requestDomains: allow, resourceTypes: ["main_frame", "sub_frame"] },
     });
   }
   const temp = cleanDomains(activeTemporaryAllows(state.rules.temporaryAllows, now));
@@ -81,7 +97,7 @@ export function buildDnrRules(state, { blockedPageUrl, now = Date.now() }) {
       id: RULE_ID_TEMP_ALLOW,
       priority: 3,
       action: { type: "allow" },
-      condition: { requestDomains: temp, resourceTypes: ["main_frame"] },
+      condition: { requestDomains: temp, resourceTypes: ["main_frame", "sub_frame"] },
     });
   }
   return rules;
@@ -106,20 +122,21 @@ export function pruneAllows(allows, now = Date.now()) {
 }
 
 /**
- * State as the extension enforces it: local allows merged in, and while the app is away the manual
- * mode, unless the last state it sent holds a locked strict phase (strictUntil in the future),
- * which stays strict whatever was chosen.
+ * State as the extension enforces it. While the app is away: the manual mode, unless the last
+ * state it sent holds a locked strict phase (strictUntil in the future), which stays strict
+ * whatever was chosen. Local allows ("Allow 5 min" granted here) only count in focus mode; the
+ * caller drops them whenever the app pushes a state, so while connected the app's temporaryAllows
+ * are the only grants that last.
  */
 export function effectiveState(state, { connected, manualMode, localAllows, now = Date.now() }) {
+  const mode = connected ? state.mode : strictLockUntil(state, now) ? "strict" : manualMode || state.mode;
   const merged = { ...pruneAllows(state.rules.temporaryAllows, now) };
-  for (const [host, until] of Object.entries(pruneAllows(localAllows, now))) {
-    merged[host] = Math.max(merged[host] || 0, until);
+  if (mode === "focus") {
+    for (const [host, until] of Object.entries(pruneAllows(localAllows, now))) {
+      merged[host] = Math.max(merged[host] || 0, until);
+    }
   }
-  return {
-    ...state,
-    mode: connected ? state.mode : strictLockUntil(state, now) ? "strict" : manualMode || state.mode,
-    rules: { ...state.rules, temporaryAllows: merged },
-  };
+  return { ...state, mode, rules: { ...state.rules, temporaryAllows: merged } };
 }
 
 /** Selectors to hide on a hostname: presets + group rules + rules picked locally. */
@@ -158,7 +175,35 @@ export function withSite(rules, site, list) {
 
 /** Rejects anything that could break out of the generated rule. */
 export function isSafeSelector(selector) {
-  return typeof selector === "string" && selector.trim().length > 0 && selector.length < 500 && !/[{}<>;@]|\/\*/.test(selector);
+  return typeof selector === "string" && selector.trim().length > 0 && selector.length < 500 && !/[{}<>;@]|\/\*/.test(selector) && isBalancedSelector(selector);
+}
+
+/**
+ * Every [ ( and quote closed, and no escape left dangling at the end. CSS closes an open bracket
+ * or string at the end of the sheet, so "a[href" would swallow every rule after it.
+ */
+export function isBalancedSelector(selector) {
+  const stack = [];
+  let quote = "";
+  for (let i = 0; i < selector.length; i++) {
+    const ch = selector[i];
+    if (ch === "\\") {
+      if (i === selector.length - 1) return false;
+      i++;
+      continue;
+    }
+    if (quote) {
+      if (ch === quote) quote = "";
+      else if (ch === "\n" || ch === "\r" || ch === "\f") return false; // a bad string runs to the line end
+      continue;
+    }
+    if (ch === '"' || ch === "'") quote = ch;
+    else if (ch === "[" || ch === "(") stack.push(ch === "[" ? "]" : ")");
+    else if (ch === "]" || ch === ")") {
+      if (stack.pop() !== ch) return false;
+    }
+  }
+  return !quote && stack.length === 0;
 }
 
 /** One rule per selector so an invalid selector cannot void the others. */

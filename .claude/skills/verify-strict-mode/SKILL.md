@@ -1,6 +1,6 @@
 ---
 name: verify-strict-mode
-description: "Check a change to Kairos Desktop's mode, Pomodoro timer, 'Allow 5 min' overrides, blocking-rule edits, or quitting and relaunching during Strict against the strict-mode model. Use when editing OverrideLedger, RuleLock or AppData.updateGroup (Rules.swift), TempoEngine (Tempo.swift), Mode or FocusState (Models.swift), recoverAfterLaunch (History.swift), setMode / startFocus / skipPhase / stopTimer / apply / syncFocusFromTempo / requestOverride in AppModel.swift, or the Mode picker and Quit handling in KairosApp.swift."
+description: "Check a change to Kairos Desktop's mode, Pomodoro timer, 'Allow 5 min' overrides, blocking-rule edits, or quitting and relaunching during Strict against the strict-mode model. Use when editing OverrideLedger, RuleLock or AppData.updateGroup (Rules.swift), TempoEngine (Tempo.swift), Mode or FocusState (Models.swift), recoverAfterLaunch (History.swift), setMode / startFocus / skipPhase / stopTimer / apply / syncFocusFromTempo / requestOverride in AppModel.swift, or the Mode picker and Quit handling in KairosApp.swift. Also for the same code in Kairos for Linux (apps/linux, Rust): OverrideLedger, rule_lock and AppData::update_group (rules.rs), TempoEngine (tempo.rs), Mode and FocusState (models.rs), recover_after_launch (history.rs), set_mode / start_focus / skip_phase / stop_timer / apply / sync_focus_from_tempo / switch_group / request_override in kairos/src/model.rs, the tray menu and App::quit (main.rs, platform/tray.rs), and the Mode picker and Skip/Stop on Today (ui/pages.rs)."
 ---
 
 # Verify strict mode
@@ -13,6 +13,7 @@ Everything lives in `verification/strict-mode/`:
 - `anchors.tsv` lists the exact lines of code each part of the model mirrors.
 - `expected.tsv` is the result on the code as it stands, including known findings.
 - `check.sh` runs it. It needs `java`; it downloads the pinned TLC (TLA+ tools 1.7.4, checksum verified) on first run.
+- `anchors-linux.tsv`, `expected-linux.tsv` and `synced-linux.sha256` are the same three for Kairos for Linux (`apps/linux`, Rust). The Rust port does what the Swift does in every part the model describes, so the same `StrictMode.tla`, with the same switch values, checks both. See "Kairos for Linux" below.
 
 ## The properties
 
@@ -28,7 +29,7 @@ Everything lives in `verification/strict-mode/`:
 
 ## Findings so far
 
-One open, recorded as `FAIL` in `expected.tsv`:
+One open, recorded as `FAIL` in `expected.tsv` and in `expected-linux.tsv` (the Rust port has it too, see "Kairos for Linux"):
 
 - `StrictKeepsGroup` (found 2026-11-10, when rule edits were added to the model). `switchGroup` has no strict guard, so during a strict focus phase a group switch (Kairos Bar, ⌃1 to ⌃9, Start on a task in another group, or deleting the active group) puts that group's rules in force even when it blocks less. Steps: SetMode(strict), StartFocus, SwitchGroup to a looser group. Whether to refuse it is the owner's call: `RuleLock.loosens(active, to: next)` could refuse only switches to a looser group, but most pairs of groups are not subsets of each other, so in practice that refuses most switches.
 
@@ -44,16 +45,18 @@ Quitting used to end a strict phase: launch always came back off. Since 2026-11-
 ## Run it
 
 ```
-verification/strict-mode/check.sh            # about 5 seconds
-verification/strict-mode/check.sh --mutants  # also proves each property can still fail
+verification/strict-mode/check.sh                    # Mac (Swift), about 5 seconds
+verification/strict-mode/check.sh --mutants          # also proves each property can still fail
+verification/strict-mode/check.sh --linux --mutants  # Linux (Rust), against anchors-linux.tsv and expected-linux.tsv
+verification/strict-mode/check.sh --all --mutants    # both, Mac first, each under its own heading
 ```
 
-Exit 0 means the result matches `expected.tsv`. Read the output like this:
+With no target flag it checks the Mac app only, and the output is as it always was. Exit 0 means the result matches `expected.tsv` (or `expected-linux.tsv`); with `--all` the exit code is the worse of the two. Read the output like this:
 
 - `OUT OF SYNC` (exit 2): a line the model mirrors is gone or duplicated. The model no longer describes the code. Go to "When the code changes".
 - `NOTE covered files changed`: the anchors still match but a covered file was edited. Read the diff for a new way to change `data.focus.mode`, the `TempoEngine`, the `OverrideLedger` or a group's rules (a new button, a new bridge message, a new call to `ledger.reset()`, a write to `data.groups` that skips `updateGroup`). If there is one, add it to the model as an action. Then run `check.sh --confirm`.
 - `CHANGED` (exit 1): a property's result differs from `expected.tsv`. The steps printed under it are the shortest sequence of presses that breaks it, with the mode, timer phase and grant after each.
-- `KNOWN FINDING`: a property recorded as `FAIL` in `expected.tsv`, unchanged. There are none today.
+- `KNOWN FINDING`: a property recorded as `FAIL` in `expected.tsv`, unchanged. Today that is `StrictKeepsGroup`, on both targets.
 
 Read every result with the `/statechart` skill. It tells each violation as its shortest path in plain words and shows which violations a change fixes; when everything passes it draws how the app moves between states.
 
@@ -63,11 +66,11 @@ Take the printed steps and walk them through the code, one line per step, using 
 
 ## When the code changes
 
-1. Make the model say what the code now says. A removed guard means the matching switch is false for the current code (for example `LedgerRefusesStrict`); set it in the `run` defaults in `check.sh`. A new way to change mode, timer or overrides is a new action in `Next`.
+1. Make the model say what the code now says. A removed guard means the matching switch is false for the current code (for example `LedgerRefusesStrict`); set it in that target's `SWITCHES` in `use_target` in `check.sh` (Mac and Linux are set apart, so one app losing a guard does not change the other's run). A new way to change mode, timer or overrides is a new action in `Next`.
 2. Update `anchors.tsv` so each mirrored line is listed with its real count.
 3. Run `check.sh --mutants`. If a property now fails that used to pass, that is the result of the change: report it, or fix the code if that was the task.
 4. If the check finds a new break you are not fixing now, record it: set that row in `expected.tsv` to `FAIL` with a one-line note, and describe it under Findings with its steps.
-5. Only after you have read the covered files and the model side by side, run `check.sh --confirm`.
+5. Only after you have read the covered files and the model side by side, run `check.sh --confirm` (Mac) or `check.sh --confirm --linux`.
 
 ## Coverage and sync
 
@@ -84,9 +87,41 @@ Last confirmed in sync: 2026-11-10, at commit 12c70d3 "Detect full screen from t
 - It checks the model, not the Swift. `anchors.tsv` catches a mirrored line changing; it cannot catch new code that changes the mode some other way. That is what the `NOTE` is for.
 - Bounds: `Max = 3` overrides. Short and long breaks are one phase. Grant expiry is "at some point", not five minutes.
 - Quit and relaunch: a paused strict phase resumes running at launch, with its saved end (the time it would have ended if resumed at the last save); the model treats paused and running alike there.
-- Rules are one bit per step: an edit or a switch is looser or it is not. Which edits count as looser is `RuleLock.loosens`, tested in `RuleLockTests`. The privacy list "Never send off this Mac" (Settings) also stops Jev from checking a site; it is a privacy setting and stays editable in Strict.
+- Rules are one bit per step: an edit or a switch is looser or it is not. Which edits count as looser is `RuleLock.loosens`, tested in `RuleLockTests`. The privacy list "Never send off this Mac" (Settings) also stops Jev from checking a site; on the Mac it is a privacy setting and stays editable in Strict. In Kairos for Linux, Settings changes go through `AppData::update_settings`, which refuses `rule_lock::settings_loosen` changes while locked: adding to that list, and turning off "Block browsers that Kairos Shield is not running in" or Jev's fail-closed switch. These are modelled as `EditRules`, as is pinning an app to the active group's Kairos Bar (Jev trusts those apps), which goes through `Model::update_group`.
 - Hiding apps on a group switch (`SwitchBehavior`, `GroupSwitch.plan`) is left out. Returning to a group un-hides the apps hidden when it was left; an app that group blocks is hidden again by the app guard's sweep, which is not modelled.
 - Left out: the Chrome extensions' own handling of the pushed state (they keep enforcing until `strictUntil` while Kairos is closed), app blocking and Jev, and the reason text on an override.
+
+## Kairos for Linux
+
+`check.sh --linux` checks the Rust port in `apps/linux` against the same model. Each step is one call on the GTK main thread in `apps/linux/crates/kairos/src/model.rs` (`Model` is `Rc` and every caller, including the tray and the bridge, reaches it through the main loop), so each is still one indivisible step.
+
+How the model maps to the Rust:
+
+| Model | Rust |
+| --- | --- |
+| `Override`, `LedgerRefusesStrict`, `LedgerChecksMax` | `OverrideLedger::request` in `kairos-core/src/rules.rs`, called from `Model::request_override` |
+| `Ledger`, `ResetsOnEnterStrict` | `Model::mode_changed` (runs from `data_changed` on every mode change) and `TempoEvent::Started(Focus)` in `Model::apply` |
+| `Synced`, `SyncsModeFromTimer` | `Model::sync_focus_from_tempo` |
+| `SetMode`, `PickerLockedByTimer` | `Model::set_mode`, which returns early unless the timer is idle, from `mode_picker` on Today (`b.set_sensitive(idle)`) and the tray's Mode submenu (`enabled: !s.mode_locked`) |
+| `StartFocus` | `Model::start_focus` (after `request_start_focus` asks, and rechecks idle) |
+| `Skip`, `Stop`, `LocksStrictControls` | `Model::skip_phase` and `stop_timer` return early while `strict_locked()`; Skip and Stop are insensitive on Today and in the tray |
+| `TimeUp`, `LongSleep`, `BreakOver` | `Model::tick` -> `TempoEngine::tick` / `advance`; `Stopped` and `AwaitingFocus` turn the mode off in `apply` |
+| `SwitchGroup` | `Model::switch_group` (Kairos Bar, tray Group menu, group hotkeys, Groups page, Start or Make current on a task in another group), `delete_group`, `import_data` (idle only) |
+| `EditRules`, `LocksRules` | `AppData::update_group` with `rule_lock::loosens`, reached from `Model::update_group` (Rules and Groups pages), `Model::set_app_blocked` (Kairos Bar) and the `rule.*` bridge messages |
+| `Quit`, `QuitLocked` | `App::quit(false)` in `main.rs`, from the tray's Quit Kairos (disabled with a note while locked). Closing the window only hides it (`set_hide_on_close`); there is no other way Kairos quits itself |
+| `ForceQuit` | SIGINT, SIGTERM, SIGHUP call `App::quit(true)`, which goes through (a logout cannot be refused); a crash or `kill -9` |
+| `Quit` saving `strictUntil`, `Relaunch`, `ResumesStrict` | `focus.strict_until` in `sync_focus_from_tempo`; `AppData::recover_after_launch` (`history.rs`) and `tempo.resume_strict` in `Model::new` |
+
+Covered (in `check.sh`'s Linux list, so an edit raises the `NOTE`): `kairos-core/src/rules.rs`, `tempo.rs`, `models.rs`, `history.rs`; `kairos/src/model.rs`, `main.rs`, `platform/tray.rs`, `ui/pages.rs`, `ui/window.rs`, `ui/bar.rs`, `ui/widgets.rs`. `bar.rs` and `widgets.rs` are watched, not modelled: they only call `switch_group`, `start_task`, `set_app_blocked`, `delete_group` and `update_group` for pinned apps. Reordering groups on the Groups page (`d.groups.swap` in `pages.rs`) writes `data.groups` directly but changes no rule.
+
+Result on 2026-11-21: the same as the Mac. Six properties hold, every mutant fails, and `StrictKeepsGroup` fails with the same steps. In the code's words: launch with nothing saved (`recover_after_launch` sets the mode off); pick Strict on Today (`set_mode`); Start focus and agree (`start_focus`: `strict = s.mode() == Mode::Strict`, `tempo.start(TempoPhase::Focus, strict, ...)`); then click another group on Kairos Bar, pick it in the tray's Group menu, or press its group hotkey. `switch_group` (`model.rs`) only checks that the group is not already active, writes `d.focus = next`, and `data_changed` hides and pushes the new group's apps and sites (`bridge_state` reads `data.active_group()`), while the mode stays Strict. Deleting the active group does the same through `delete_group`.
+
+Linux-only things the model does not show:
+
+- Since 2026-11-21 `set_mode` refuses a change unless the timer is idle, as the views do, so a Mode press from a stale view (the tray menu is a snapshot sent over D-Bus and its command arrives later, `TrayCommand::SetMode(mode) => m.set_mode(mode)`; `MainWindow::rebuild` skips the rebuild while a text field or slider has focus) cannot take a strict phase out of Strict. On the Mac only the views lock the picker.
+- Only one Kairos should run per data folder; two would keep two ledgers and two timers. The model assumes one.
+
+Last confirmed in sync: 2026-11-21, at commit 86767ee "Add Kairos for Linux Mint, a Rust and GTK 4 port of Kairos Desktop", plus uncommitted edits by other work in `main.rs` (a single-instance lock) and `ui/window.rs` (rebuild on activation only when something outside Kairos changed); neither changes the mode, timer, overrides or rules. Recorded in `verification/strict-mode/synced-linux.sha256`.
 
 ## The Dock takeover has its own model
 

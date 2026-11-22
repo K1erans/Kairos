@@ -1,10 +1,12 @@
 # Kairos
 
-A Mac focus app with two Chrome extensions.
+A focus app for Mac and Linux Mint, with two Chrome extensions.
 
 - **Kairos Desktop** (`apps/desktop`): tasks, groups, a Pomodoro timer with Focus, Break and
   Strict modes, Kairos Bar (a dock for the active group), app blocking, and Jev, an AI check that
   asks whether what is on screen fits the task you are working on.
+- **Kairos for Linux** (`apps/linux`): Kairos Desktop for Linux Mint (Cinnamon, X11), in Rust and
+  GTK 4. See `apps/linux/README.md` to build and install it.
 - **Kairos Shield** (`extensions/shield`): blocks sites and hides page elements in the browser
   while you focus. Without it Kairos cannot block any site.
 - **Kairos Read** (`extensions/read`): reads articles aloud and builds 3D scenes from them.

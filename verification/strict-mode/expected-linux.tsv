@@ -1,0 +1,8 @@
+# invariant	expected on the current code	note
+UsedBounded	PASS	
+ModeMatchesTimer	PASS	
+StrictNoGrant	PASS	
+StrictNoEscape	PASS	
+QuitRefusedInStrict	PASS	
+StrictRulesHold	PASS	
+StrictKeepsGroup	FAIL	switching to a group that blocks less (Model::switch_group, or deleting the active group) is not refused in a strict focus phase

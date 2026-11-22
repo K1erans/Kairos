@@ -9,6 +9,7 @@ import {
   cssForSelectors,
   effectiveState,
   firstWords,
+  isBalancedSelector,
   isSafeSelector,
   jevCacheKey,
   jevSkipReason,
@@ -24,7 +25,18 @@ const make = (over = {}, rules = {}) =>
 
 test("no rules outside focus and strict", () => {
   for (const mode of ["off", "break"]) assert.deepEqual(buildDnrRules(make({ mode }), { blockedPageUrl: BLOCKED }), []);
-  assert.equal(buildDnrRules(make({ mode: "strict" }), { blockedPageUrl: BLOCKED }).length, 1);
+  assert.equal(buildDnrRules(make({ mode: "strict" }), { blockedPageUrl: BLOCKED }).length, 2);
+});
+
+test("frames of a blocked site are blocked too, and allows cover frames as well", () => {
+  const rules = buildDnrRules(make({}, { allowSites: ["music.youtube.com"], temporaryAllows: { "reddit.com": 5000 } }), { blockedPageUrl: BLOCKED, now: 1000 });
+  const frame = rules.find((r) => r.condition.resourceTypes.includes("sub_frame") && r.action.type !== "allow");
+  assert.equal(frame.action.type, "block", "not redirected: the block page refuses to work in a frame");
+  assert.deepEqual(frame.condition.requestDomains, ["reddit.com", "youtube.com"]);
+  for (const allow of rules.filter((r) => r.action.type === "allow")) {
+    assert.deepEqual(allow.condition.resourceTypes, ["main_frame", "sub_frame"]);
+    assert.ok(allow.priority > frame.priority);
+  }
 });
 
 test("block rule redirects main frames to the block page with the URL in the hash", () => {
@@ -43,13 +55,13 @@ test("allow list and live temporary allows get higher priority than the block", 
     make({}, { allowSites: ["music.youtube.com"], temporaryAllows: { "reddit.com": 5000, "x.com": 10 } }),
     { blockedPageUrl: BLOCKED, now: 1000 },
   );
-  assert.equal(rules.length, 3);
-  const [block, allow, temp] = rules;
+  assert.equal(rules.length, 4);
+  const [block, , allow, temp] = rules;
   assert.ok(allow.priority > block.priority && temp.priority > allow.priority);
   assert.equal(allow.action.type, "allow");
   assert.deepEqual(allow.condition.requestDomains, ["music.youtube.com"]);
   assert.deepEqual(temp.condition.requestDomains, ["reddit.com"]); // x.com expired
-  assert.equal(new Set(rules.map((r) => r.id)).size, 3);
+  assert.equal(new Set(rules.map((r) => r.id)).size, 4);
 });
 
 test("no rule is emitted with an empty domain list", () => {
@@ -61,10 +73,22 @@ test("effectiveState uses manual mode only while disconnected and merges local a
   const base = make({}, { temporaryAllows: { "a.com": 5000, "old.com": 1 } });
   const away = effectiveState(base, { connected: false, manualMode: "off", localAllows: { "b.com": 9000 }, now: 1000 });
   assert.equal(away.mode, "off");
-  assert.deepEqual(away.rules.temporaryAllows, { "a.com": 5000, "b.com": 9000 });
+  const awayFocus = effectiveState(make({ mode: "break" }, base.rules), { connected: false, manualMode: "focus", localAllows: { "b.com": 9000 }, now: 1000 });
+  assert.equal(awayFocus.mode, "focus");
+  assert.deepEqual(awayFocus.rules.temporaryAllows, { "a.com": 5000, "b.com": 9000 });
   const here = effectiveState(base, { connected: true, manualMode: "off", localAllows: {}, now: 1000 });
   assert.equal(here.mode, "focus");
   assert.equal(base.rules.temporaryAllows["old.com"], 1, "input state is not mutated");
+});
+
+test("local allows count in focus only: a grant from focus does not carry into strict", () => {
+  const strict = make({ mode: "strict" });
+  const here = effectiveState(strict, { connected: true, manualMode: null, localAllows: { "youtube.com": 9000 }, now: 1000 });
+  assert.deepEqual(here.rules.temporaryAllows, {});
+  const locked = make({ mode: "focus", strictUntil: 50_000 });
+  const away = effectiveState(locked, { connected: false, manualMode: "focus", localAllows: { "youtube.com": 9000 }, now: 1000 });
+  assert.equal(away.mode, "strict");
+  assert.deepEqual(away.rules.temporaryAllows, {});
 });
 
 test("nextExpiry picks the soonest future expiry", () => {
@@ -94,6 +118,18 @@ test("unsafe selectors are dropped and CSS is one rule per selector", () => {
   const s = make({}, { hiddenElements: { "a.com": ["#ok", "x } body { color:red"] } });
   assert.deepEqual(selectorsForHost("a.com", s), ["#ok"]);
   assert.equal(cssForSelectors(["#a", ".b"]), "#a{display:none!important}\n.b{display:none!important}");
+});
+
+test("a selector with an unclosed bracket, paren or quote is refused, so it cannot swallow the rules after it", () => {
+  for (const bad of ["a[href", "div:not(.x", 'a[title="x]', "a[title='x]", "div)", "a]", "a\\", 'a[title="x\\"]']) {
+    assert.ok(!isSafeSelector(bad), bad);
+  }
+  for (const good of ["a[href]", "div:not(.x)", 'a[title="x]"]', "a[title='(']", "#a\\:b", 'a[title="x\\"y"]', "ytd-guide-entry-renderer:has(a[title='Shorts'])"]) {
+    assert.ok(isSafeSelector(good), good);
+    assert.ok(isBalancedSelector(good), good);
+  }
+  const s = make({}, { hiddenElements: { "a.com": ["#one", "a[href", "#two"] } });
+  assert.deepEqual(selectorsForHost("a.com", s), ["#one", "#two"]);
 });
 
 test("firstWords caps the Jev excerpt at 500 words", () => {

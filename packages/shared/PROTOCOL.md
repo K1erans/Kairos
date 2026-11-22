@@ -57,6 +57,7 @@ Extension IDs (fixed by the `key` in each manifest):
       "hiddenElements": { "youtube.com": ["#related"] },
       "jevEnabled": true,
       "jevThreshold": 0.7,
+      "jevFailClosed": false,
       "neverAnalyse": ["mail.google.com"],
       "temporaryAllows": { "reddit.com": 1794252786430 }
     }
@@ -70,6 +71,8 @@ fetches and plays that audio itself: the extension sends one `tts.speak` per sen
 `tts.done`. A site matches a rule when its hostname
 equals the entry or ends with `.` + entry. `temporaryAllows` maps hostname -> expiry (ms); an entry
 that has not expired beats block rules and Jev.
+`jevFailClosed` mirrors the "Block the page when Jev is slow or offline" setting; Kairos Shield
+applies it when Kairos Desktop does not answer a `jev.check` in time (missing means `false`).
 
 Which layers apply per mode:
 

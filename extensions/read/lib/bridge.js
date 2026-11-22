@@ -4,6 +4,16 @@
 
 export const HOST_NAME = "com.kairos.host";
 export const OUTBOX_LIMIT = 50;
+/** Wakes a sleeping service worker to reconnect; setTimeout alone dies with the worker. */
+export const RECONNECT_ALARM = "kairos-bridge-reconnect";
+
+/**
+ * The host's id-less error when the app is not listening. macOS says "Kairos Desktop is not
+ * running"; older Linux hosts said "Kairos isn't running." (either apostrophe).
+ */
+export function saysNotRunning(message) {
+  return /(?:\bnot|n['\u2019]t) running/i.test(String(message || ""));
+}
 
 /**
  * Why the app is not reachable: "app-not-running" (the native host started but Kairos Desktop is
@@ -38,11 +48,14 @@ export function describeConnection(connected, problem) {
  *        so a caller can persist it across service worker restarts
  * @param {() => {onMessage: any, onDisconnect: any, postMessage: Function, disconnect: Function}} [opts.connect]
  *        injectable for tests; defaults to chrome.runtime.connectNative
+ * @param {{create: Function, clear: Function, onAlarm: {addListener: Function}} | null} [opts.alarms]
+ *        defaults to chrome.alarms when the extension has that permission; null turns the wake-up off
  */
 export function createBridge(opts) {
   const { client, version, onMessage, onStatus, onOutbox, onProblem } = opts;
   const connect = opts.connect || (() => chrome.runtime.connectNative(HOST_NAME));
   const setTimer = opts.setTimeout || ((fn, ms) => setTimeout(fn, ms));
+  const alarms = opts.alarms !== undefined ? opts.alarms : typeof chrome !== "undefined" && chrome.alarms ? chrome.alarms : null;
   const pending = new Map(); // id -> {resolve, reject, timer}
   let port = null;
   let connected = false;
@@ -57,7 +70,10 @@ export function createBridge(opts) {
   function setConnected(value) {
     if (connected === value) return;
     connected = value;
-    if (value) flushOutbox();
+    if (value) {
+      clearAlarm();
+      flushOutbox();
+    }
     if (onStatus) onStatus(value);
   }
 
@@ -70,6 +86,38 @@ export function createBridge(opts) {
     let sent = 0;
     while (sent < outbox.length && post(outbox[sent])) sent++;
     if (sent) setOutbox(outbox.slice(sent));
+  }
+
+  function clearAlarm() {
+    if (!alarms) return;
+    try {
+      const done = alarms.clear(RECONNECT_ALARM);
+      if (done && typeof done.catch === "function") done.catch(() => {});
+    } catch (_) { /* no alarms permission */ }
+  }
+
+  // Chrome stops an idle service worker after about 30 s and its timers with it. The alarm starts
+  // the worker again (which reconnects as it loads) or, if it is still running, retries here.
+  function scheduleAlarm() {
+    if (!alarms) return;
+    try {
+      const done = alarms.create(RECONNECT_ALARM, { delayInMinutes: 0.5, periodInMinutes: 1 });
+      if (done && typeof done.catch === "function") done.catch(() => {});
+    } catch (_) { /* no alarms permission */ }
+  }
+
+  if (alarms && alarms.onAlarm) {
+    alarms.onAlarm.addListener((alarm) => {
+      if (!alarm || alarm.name !== RECONNECT_ALARM) return;
+      if (stopped) return;
+      if (connected) {
+        clearAlarm();
+        return;
+      }
+      if (port) return; // a connection attempt is under way
+      if (retryTimer) clearTimeout(retryTimer);
+      start();
+    });
   }
 
   function failPending(reason, code) {
@@ -99,6 +147,7 @@ export function createBridge(opts) {
     setConnected(false);
     failPending(detail ? `Kairos Desktop is not connected (${detail})` : "Kairos Desktop is not connected", "disconnected");
     if (stopped) return;
+    scheduleAlarm();
     retryTimer = setTimer(start, backoff);
     backoff = Math.min(backoff * 2, 30000);
   }
@@ -108,7 +157,7 @@ export function createBridge(opts) {
     // The host says "Kairos Desktop is not running" with an id-less error just before it exits;
     // anything else proves the host reached the app.
     if (msg.type === "error" && !msg.id) {
-      if (/not running/i.test(msg.message || "")) hostSaidNotRunning = true;
+      if (saysNotRunning(msg.message)) hostSaidNotRunning = true;
       return;
     }
     backoff = 1000;
@@ -197,6 +246,7 @@ export function createBridge(opts) {
   function stop() {
     stopped = true;
     if (retryTimer) clearTimeout(retryTimer);
+    clearAlarm();
     if (port) {
       try { port.disconnect(); } catch (_) { /* already gone */ }
       port = null;

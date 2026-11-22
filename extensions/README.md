@@ -46,4 +46,13 @@ each manifest, so they are the same on every machine.
   reopened; "Open in tab" shows it full size (`read/scene.html`). Cancel only stops waiting, since
   Kairos Desktop has no way to abandon a build.
 - When Kairos Desktop is not running, Shield keeps the last known mode (with a manual switch in the
-  popup) and Read still reads; 3D scenes and Jev need the app.
+  popup, forgotten once the app connects again) and Read still reads, refusing the sites the last
+  known state blocks; 3D scenes and Jev need the app. Both reconnect on a `chrome.alarms` alarm
+  as well as a timer, since Chrome stops an idle service worker and its timers.
+- Shield blocks a blocked site's frames too (embedded videos), and sends a tab to the block page when
+  a blocked page shows up without a request the rules saw (Back into the page cache). The block page
+  does nothing inside a frame.
+- When Jev takes over 8 s, Shield follows the app's "block when Jev is slow or offline" setting
+  (`rules.jevFailClosed`) and applies Jev's answer when it comes.
+- The scene sandbox removes WebRTC (`RTCPeerConnection` and friends) before scene code runs, since
+  the CSP cannot stop STUN/ICE traffic, and takes out any frame a scene adds.

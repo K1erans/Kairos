@@ -3,6 +3,7 @@
 import { createBridge, describeConnection } from "./lib/bridge.js";
 import { EMPTY_STATE, hostnameOf, normalizeDomain, ruleLockText, sanitizeState, siteVerdict, strictLockUntil } from "./lib/match.js";
 import {
+  JEV_LATE_MS,
   JEV_TIMEOUT_MS,
   buildDnrRules,
   canOverride,
@@ -21,11 +22,12 @@ import {
 
 const VERSION = chrome.runtime.getManifest().version;
 const BLOCKED_PAGE = chrome.runtime.getURL("blocked.html");
+const OWN_ORIGIN = chrome.runtime.getURL("");
 const EXPIRY_ALARM = "kairos-temp-allow-expiry";
 
 let appState = sanitizeState(EMPTY_STATE); // last state pushed by Kairos Desktop
-let manualMode = null; // used only while the app is disconnected
-let localAllows = {}; // hostname -> expiry, set when an override is granted
+let manualMode = null; // chosen in the popup while the app is away; cleared when it comes back
+let localAllows = {}; // hostname -> expiry, set when an override is granted; dropped on every app state
 let localElements = {}; // hostname -> [selectors] picked in this browser
 let connected = false;
 let problem = null; // why the app is not reachable; see describeConnection
@@ -54,14 +56,25 @@ const bridge = createBridge({
     if (msg.type === "state") {
       ready.then(() => {
         appState = sanitizeState(msg.state);
-        chrome.storage.local.set({ state: appState });
+        // The app's temporaryAllows hold every override it granted; a grant made here (while it
+        // was away, or before this push) must not outlive a new mode or session.
+        localAllows = {};
+        chrome.storage.local.set({ state: appState, localAllows });
         applyState();
       });
     }
   },
   onStatus: (value) => {
     connected = value;
-    ready.then(applyState);
+    ready.then(() => {
+      // The popup's switch only stands in for the app while it is away. Kept, it would come back
+      // at the next disconnect or browser start and could switch blocking off.
+      if (value && manualMode !== null) {
+        manualMode = null;
+        chrome.storage.local.set({ manualMode: null });
+      }
+      return applyState();
+    });
   },
   onProblem: (value) => {
     problem = value;
@@ -145,9 +158,18 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 chrome.runtime.onInstalled.addListener(() => ready.then(applyState));
 chrome.runtime.onStartup.addListener(() => ready.then(applyState));
 
-// Single-page apps change URL without a load; tell the page so it re-runs its checks.
+// Single-page apps change URL without a load; tell the page so it re-runs its checks. A tab that
+// lands on a blocked site without a network request the rules saw (Back into the page cache, or a
+// load that began before the rules changed) goes to the block page.
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
-  if (changeInfo.url) chrome.tabs.sendMessage(tabId, { type: "page.navigated", url: changeInfo.url }).catch(() => {});
+  if (!changeInfo.url) return;
+  ready.then(() => {
+    if (/^https?:\/\//i.test(changeInfo.url) && siteVerdict(changeInfo.url, current()) === "blocked") {
+      chrome.tabs.update(tabId, { url: `${BLOCKED_PAGE}#${changeInfo.url}` }).catch(() => {});
+    } else {
+      chrome.tabs.sendMessage(tabId, { type: "page.navigated", url: changeInfo.url }).catch(() => {});
+    }
+  });
 });
 
 // ---- messages from pages and the popup ------------------------------------------------------
@@ -171,6 +193,42 @@ function pageInfo(url, incognito = false) {
   };
 }
 
+const jevAsking = new Map(); // cache key -> the jev.check under way for it
+let jevCacheChain = Promise.resolve();
+
+/** One jev.check per page at a time; its answer is cached when it comes, however late. */
+function askJev(page, key) {
+  let answer = jevAsking.get(key);
+  if (answer) return answer;
+  answer = bridge
+    .request(
+      { type: "jev.check", url: page.url, title: page.title || "", description: page.description || "", excerpt: page.excerpt || "" },
+      JEV_TIMEOUT_MS + JEV_LATE_MS,
+    )
+    .then((result) => {
+      jevCacheChain = jevCacheChain
+        .then(async () => {
+          const stored = await chrome.storage.local.get("jevCache");
+          await chrome.storage.local.set({ jevCache: rememberJev(pruneJevCache(stored.jevCache), key, result) });
+        })
+        .catch(() => {});
+      return result;
+    })
+    .finally(() => jevAsking.delete(key));
+  jevAsking.set(key, answer);
+  return answer;
+}
+
+/** The reply for a Jev verdict, unless the state changed while Jev was answering. */
+function jevVerdict(page, key, block, incognito) {
+  if (!block) return { block: false };
+  // The page asks again after page.update.
+  const now = current();
+  if (jevSkipReason(page.url, now, { connected, incognito }) || jevCacheKey(page.url, now) !== key) return { block: false };
+  bridge.send({ type: "blockEvent", target: page.url, layer: "jev", overridden: false });
+  return { block: true, ...pageInfo(page.url, incognito) };
+}
+
 async function jevCheck(page, sender) {
   const state = current();
   const incognito = !!(sender.tab && sender.tab.incognito);
@@ -178,29 +236,33 @@ async function jevCheck(page, sender) {
 
   const key = jevCacheKey(page.url, state);
   const stored = await chrome.storage.local.get("jevCache");
-  let cache = pruneJevCache(stored.jevCache);
-  let block;
-  if (cache[key]) {
-    block = cache[key].block === true;
-  } else {
-    try {
-      const result = await bridge.request(
-        { type: "jev.check", url: page.url, title: page.title || "", description: page.description || "", excerpt: page.excerpt || "" },
-        JEV_TIMEOUT_MS,
-      );
-      block = result.block === true;
-      cache = rememberJev(cache, key, result);
-      chrome.storage.local.set({ jevCache: cache });
-    } catch (_) {
-      return { block: false }; // slow or offline: treated as "unsure" and let through
-    }
-  }
-  if (!block) return { block: false };
-  // The state may have changed while Jev was answering; the page asks again after page.update.
-  const now = current();
-  if (jevSkipReason(page.url, now, { connected, incognito }) || jevCacheKey(page.url, now) !== key) return { block: false };
-  bridge.send({ type: "blockEvent", target: page.url, layer: "jev", overridden: false });
-  return { block: true, ...pageInfo(page.url, incognito) };
+  const cached = pruneJevCache(stored.jevCache)[key];
+  if (cached) return jevVerdict(page, key, cached.block === true, incognito);
+
+  const answer = askJev(page, key);
+  let timer;
+  const outcome = await Promise.race([
+    answer.then((result) => ({ result }), () => ({ failed: true })),
+    new Promise((resolve) => { timer = setTimeout(() => resolve({ slow: true }), JEV_TIMEOUT_MS); }),
+  ]);
+  clearTimeout(timer);
+  if (outcome.result) return jevVerdict(page, key, outcome.result.block === true, incognito);
+  if (outcome.failed) return { block: false }; // the app went away: Jev needs it
+  // Kairos Desktop is slow to answer: its "block when Jev is slow or offline" setting decides
+  // for now, and the real answer replaces that when it comes.
+  const shown = jevVerdict(page, key, state.rules.jevFailClosed === true, incognito);
+  answer.then((result) => lateJev(page, key, result, shown.block, sender, incognito), () => {});
+  return shown;
+}
+
+/** Tells the page about a Jev answer that came after it had been given the fallback. */
+function lateJev(page, key, result, shownBlock, sender, incognito) {
+  const tabId = sender.tab && sender.tab.id;
+  if (!tabId || (result.block === true) === shownBlock) return;
+  const verdict = jevVerdict(page, key, result.block === true, incognito);
+  if (verdict.block === shownBlock) return;
+  const options = typeof sender.frameId === "number" ? { frameId: sender.frameId } : undefined;
+  chrome.tabs.sendMessage(tabId, { type: "jev.late", url: page.url, ...verdict }, options).catch(() => {});
 }
 
 async function requestOverride(target, reason) {
@@ -223,6 +285,7 @@ async function requestOverride(target, reason) {
   }
   if (result.allowed) {
     const until = typeof result.until === "number" ? result.until : Date.now() + state.overrideMinutes * 60_000;
+    // While connected this only bridges the gap until the app pushes the state that holds the grant.
     localAllows = { ...pruneAllows(localAllows), [host]: until };
     await chrome.storage.local.set({ localAllows });
     await applyState();
@@ -234,6 +297,11 @@ async function requestOverride(target, reason) {
 async function goBack(sender) {
   const tabId = sender.tab && sender.tab.id;
   if (!tabId) return {};
+  // Only the top frame: blocked.html can be framed by any site (it is web accessible), and its
+  // Back would then act on the framing tab. Of this extension's pages only the block page may ask.
+  if (sender.frameId !== 0) return {};
+  const url = sender.url || "";
+  if (url.startsWith(OWN_ORIGIN) && !url.startsWith(BLOCKED_PAGE)) return {};
   try {
     await chrome.tabs.goBack(tabId);
   } catch (_) {
@@ -241,6 +309,16 @@ async function goBack(sender) {
     await chrome.tabs.remove(tabId).catch(() => {});
   }
   return {};
+}
+
+/** The content script saw a blocked verdict on a page that loaded anyway: send the tab to the block page. */
+async function redirectBlocked(sender) {
+  const tabId = sender.tab && sender.tab.id;
+  if (!tabId || sender.frameId !== 0) return { redirected: false };
+  const url = sender.url || sender.tab.url || "";
+  if (!/^https?:\/\//i.test(url) || siteVerdict(url, current()) !== "blocked") return { redirected: false };
+  await chrome.tabs.update(tabId, { url: `${BLOCKED_PAGE}#${url}` }).catch(() => {});
+  return { redirected: true };
 }
 
 async function addElementRule(host, selector) {
@@ -287,6 +365,8 @@ async function removeElementRule(host, selector) {
 
 async function handle(msg, sender) {
   await ready;
+  // This extension's own pages only work at the top of a tab; a framed block page is a site's trick.
+  if (sender.tab && typeof sender.frameId === "number" && sender.frameId !== 0 && (sender.url || "").startsWith(OWN_ORIGIN)) return {};
   switch (msg.type) {
     case "page.query":
       return pageInfo(msg.url || (sender.tab && sender.tab.url) || "", !!(sender.tab && sender.tab.incognito));
@@ -301,6 +381,8 @@ async function handle(msg, sender) {
       return {};
     case "goBack":
       return goBack(sender);
+    case "page.blocked":
+      return redirectBlocked(sender);
     case "picker.picked":
       return addElementRule(msg.host, msg.selector);
     case "site.add":
@@ -327,7 +409,9 @@ async function handle(msg, sender) {
       if (connected) return { ok: false };
       if (strictLockUntil(appState)) return { ok: false, lockedUntil: strictLockUntil(appState) };
       manualMode = ["off", "focus", "break", "strict"].includes(msg.mode) ? msg.mode : null;
-      await chrome.storage.local.set({ manualMode });
+      // A grant made in focus ends when the mode leaves focus.
+      if (current().mode !== "focus") localAllows = {};
+      await chrome.storage.local.set({ manualMode, localAllows });
       await applyState();
       return { ok: true };
     default:
