@@ -908,7 +908,7 @@ struct SettingsPage: View {
                     ForEach(SwitchBehavior.allCases, id: \.self) { Text($0.label).tag($0) }
                 }
                 if model.data.settings.switchBehavior == .hide {
-                    Text("Kairos Bar shows the active group’s apps. Switching groups hides other apps’ windows and brings back the windows Kairos hid for apps in this group. Finder stays available.")
+                    Text("Switching groups hides other apps’ windows and keeps them off Kairos Bar, then brings back the windows Kairos hid for apps in this group. Apps you open while in a group still show on Kairos Bar. Finder stays available.")
                         .font(.caption).foregroundStyle(.secondary)
                 } else if model.data.settings.switchBehavior == .hideBlocked {
                     Text("Switching to a group hides its blocked apps, even with the timer off. Choose them under Rules > Blocked apps. Kairos restores their windows when you switch to a group that allows them.")

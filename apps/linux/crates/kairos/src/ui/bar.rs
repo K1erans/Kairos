@@ -148,7 +148,7 @@ impl KairosBar {
 
     fn frame_for(model: &Model) -> DockFrame {
         let s = model.s();
-        let slots = dock::DockGeometry::slots_for(&s.data, &s.open_apps);
+        let slots = dock::DockGeometry::slots_for(&s.data, &s.open_apps, &s.hidden_by_switch);
         let names: Vec<String> = slots.iter().filter_map(|slot| slot_name(model, &s.data, slot)).collect();
         let widest = names.iter().map(|n| n.chars().count() as f64 * 7.5 + 24.0).fold(0.0, f64::max).min(320.0);
         DockFrame::new(slots, s.data.settings.icon_size.clamp(20.0, 64.0), s.data.settings.dock_edge, reduced_motion(), widest)

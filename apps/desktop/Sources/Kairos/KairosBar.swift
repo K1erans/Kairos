@@ -28,8 +28,8 @@ struct DockFrame: Equatable {
     /// Gap between the screen edge and the bar.
     static let inset = 4.0
 
-    init(data: AppData, running: [String] = [], reduceMotion: Bool = false) {
-        self.init(Inputs(data: data, running: running, reduceMotion: reduceMotion))
+    init(data: AppData, running: [String] = [], hidden: Set<String> = [], reduceMotion: Bool = false) {
+        self.init(Inputs(data: data, running: running, hidden: hidden, reduceMotion: reduceMotion))
     }
 
     init(_ inputs: Inputs) {
@@ -53,8 +53,8 @@ struct DockFrame: Equatable {
         let slots: [DockGeometry.Slot], icon: Double, edge: DockEdge, reduceMotion: Bool
         /// The widest name label any slot can show.
         let labelWidth: Double
-        init(data: AppData, running: [String], reduceMotion: Bool) {
-            slots = DockGeometry.slots(for: data, running: running)
+        init(data: AppData, running: [String], hidden: Set<String> = [], reduceMotion: Bool) {
+            slots = DockGeometry.slots(for: data, running: running, hidden: hidden)
             icon = data.settings.iconSize
             edge = data.settings.dockEdge
             self.reduceMotion = reduceMotion
@@ -218,7 +218,7 @@ final class DockPanelController {
 
     init(model: AppModel) {
         self.model = model
-        tracker = DockTracker(frame: DockFrame(data: model.data, running: model.openApps, reduceMotion: reduceMotion.value))
+        tracker = DockTracker(frame: DockFrame(data: model.data, running: model.openApps, hidden: model.hiddenBySwitchApps, reduceMotion: reduceMotion.value))
         panel = FloatingPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         panel.level = .statusBar
         panel.isOpaque = false
@@ -236,8 +236,8 @@ final class DockPanelController {
         NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification)
             .sink { [weak self] _ in self?.reduceMotion.send(NSWorkspace.shared.accessibilityDisplayShouldReduceMotion) }
             .store(in: &cancellables)
-        model.$data.combineLatest(model.$openApps, reduceMotion.removeDuplicates())
-            .map { DockFrame.Inputs(data: $0, running: $1, reduceMotion: $2) }
+        model.$data.combineLatest(model.$openApps, model.$hiddenBySwitchApps, reduceMotion.removeDuplicates())
+            .map { DockFrame.Inputs(data: $0, running: $1, hidden: $2, reduceMotion: $3) }
             .removeDuplicates()
             .dropFirst()
             .map(DockFrame.init)

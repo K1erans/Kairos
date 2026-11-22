@@ -44,6 +44,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var runningApps: Set<String> = []
     /// Open apps that show in a Dock (regular activation policy), in launch order, without Kairos.
     @Published private(set) var openApps: [String] = []
+    /// Open apps currently hidden by Kairos for a group switch, kept off Kairos Bar until opened again.
+    @Published private(set) var hiddenBySwitchApps: Set<String> = []
     /// Main window navigation, here so the dock and menu bar can route into it.
     @Published var page: Page? = .today
     @Published var selectedGroupId: UUID?
@@ -107,7 +109,13 @@ final class AppModel: ObservableObject {
         })
         observers.append(wc.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] note in
             let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
-            Task { @MainActor in if let app { self?.appActivated(app) } }
+            Task { @MainActor in
+                if let app {
+                    self?.groupAppVisibility.didUnhide(app)
+                    self?.appActivated(app)
+                }
+                self?.refreshRunning()
+            }
         })
         for name in [NSWorkspace.didHideApplicationNotification, NSWorkspace.didUnhideApplicationNotification] {
             observers.append(wc.addObserver(forName: name, object: nil, queue: .main) { [weak self] note in
@@ -119,6 +127,7 @@ final class AppModel: ObservableObject {
                     } else {
                         self?.groupAppVisibility.didUnhide(app)
                     }
+                    self?.refreshRunning()
                 }
             })
         }
@@ -177,9 +186,12 @@ final class AppModel: ObservableObject {
     private func refreshRunning() {
         let running = NSWorkspace.shared.runningApplications
         runningApps = Set(running.compactMap(\.bundleIdentifier))
-        let open = running.filter { $0.activationPolicy == .regular }.compactMap(\.bundleIdentifier)
-            .filter { $0 != Bundle.main.bundleIdentifier }
+        let regular = running.filter { $0.activationPolicy == .regular && $0.bundleIdentifier != Bundle.main.bundleIdentifier }
+        let open = regular.compactMap(\.bundleIdentifier)
+        let visibleIds = Set(regular.filter { !groupAppVisibility.isHiddenBySwitch($0) }.compactMap(\.bundleIdentifier))
+        let hidden = Set(open).subtracting(visibleIds)
         if open != openApps { openApps = open }
+        if hidden != hiddenBySwitchApps { hiddenBySwitchApps = hidden }
     }
 
     private func dataChanged(from old: AppData) {
@@ -188,9 +200,11 @@ final class AppModel: ObservableObject {
             if old.activeGroup?.id != activeGroup?.id {
                 let policy = GroupSwitch(to: activeGroup, behavior: data.settings.switchBehavior)
                 groupAppVisibility.apply(policy, to: NSWorkspace.shared.runningApplications)
+                refreshRunning()
                 sweepSoon()
             } else if old.settings.switchBehavior != .leave, data.settings.switchBehavior == .leave {
                 groupAppVisibility.restore()
+                refreshRunning()
                 sweepSoon()
             }
         }

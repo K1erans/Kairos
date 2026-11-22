@@ -3,7 +3,7 @@
 //! magnification, auto-hide and the pointer's hit zone are testable without a screen.
 
 use crate::id::Id;
-use crate::models::{AppData, DockEdge, SwitchBehavior};
+use crate::models::{AppData, DockEdge};
 use std::collections::{HashMap, HashSet};
 use std::f64::consts::PI;
 use std::path::PathBuf;
@@ -83,14 +83,15 @@ impl DockGeometry {
         DockGeometry { slots, icon, max_scale }
     }
 
-    /// Kairos itself comes first, then the groups. `running` is the open apps in launch order. Those not pinned to the active group follow
-    /// the pinned ones after a separator when group isolation is off. Downloads and Trash come
-    /// last, after another separator, unless turned off in Settings.
-    pub fn slots_for(data: &AppData, running: &[String]) -> Vec<Slot> {
+    /// Kairos itself comes first, then the groups. `running` is the open apps in launch order,
+    /// and `hidden` are the apps Kairos hid on a group switch. Open apps not pinned to the active
+    /// group (and not hidden by a group switch) follow the pinned ones after a separator, so an
+    /// app you open always has an icon on the bar. Downloads and Trash come last, after another
+    /// separator, unless turned off in Settings.
+    pub fn slots_for(data: &AppData, running: &[String], hidden: &HashSet<String>) -> Vec<Slot> {
         let apps: Vec<String> = data.active_group().map(|g| g.dock_apps.clone()).unwrap_or_default();
         let mut seen: HashSet<String> = apps.iter().cloned().collect();
-        let isolates = data.active_group().is_some() && data.active_switch_behavior() == SwitchBehavior::Hide;
-        let extra: Vec<String> = if isolates { vec![] } else { running.iter().filter(|r| seen.insert((*r).clone())).cloned().collect() };
+        let extra: Vec<String> = running.iter().filter(|r| !hidden.contains(*r) && seen.insert((*r).clone())).cloned().collect();
         let mut slots = vec![Slot::Kairos, Slot::Separator];
         slots.extend(data.groups.iter().map(|g| Slot::Group(g.id)));
         slots.push(Slot::NewGroup);

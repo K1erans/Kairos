@@ -1188,7 +1188,7 @@ fn settings(model: &Rc<Model>) -> gtk::Widget {
         })));
     }
     match st.switch_behavior {
-        SwitchBehavior::Hide => sec.append(&caption("Kairos Bar shows the active group\u{2019}s apps. Switching groups minimises other apps\u{2019} windows and brings back the windows Kairos minimised for apps in this group. The file manager stays available.")),
+        SwitchBehavior::Hide => sec.append(&caption("Switching groups minimises other apps\u{2019} windows and keeps them off Kairos Bar, then brings back the windows Kairos minimised for apps in this group. Apps you open while in a group still show on Kairos Bar. The file manager stays available.")),
         SwitchBehavior::HideBlocked => sec.append(&caption("Switching to a group minimises its blocked apps, even with the timer off. Choose them under Rules > Blocked apps. Kairos restores their windows when you switch to a group that allows them.")),
         SwitchBehavior::Leave => {}
     }

@@ -130,3 +130,21 @@ fn failed_unhide_remains_owned_and_retries() {
     assert!(retried);
     assert_eq!(tracker.ownership.get(&key()), None);
 }
+
+#[test]
+fn is_hidden_by_switch_tracks_only_kairos_hidden_apps() {
+    let mut tracker = GroupVisibilityTracker::<String>::new();
+    let hide_others = GroupSwitch::new(Some(&work()), SwitchBehavior::Hide);
+    let notes_key = "notes".to_string();
+    let notes = vec![VisibilityApp { app: notes_key.clone(), app_id: Some("notes.desktop"), is_hidden: false }];
+
+    assert!(!tracker.is_hidden_by_switch(&notes_key));
+    tracker.apply(&hide_others, &notes, &mut |_| true, &mut |_| true);
+    assert!(tracker.is_hidden_by_switch(&notes_key));
+
+    tracker.did_unhide(&notes_key, false);
+    assert!(!tracker.is_hidden_by_switch(&notes_key));
+
+    tracker.did_hide(&notes_key, &mut |_| true);
+    assert!(!tracker.is_hidden_by_switch(&notes_key));
+}

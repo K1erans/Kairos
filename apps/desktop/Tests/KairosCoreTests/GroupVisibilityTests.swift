@@ -149,4 +149,26 @@ final class GroupVisibilityTests: XCTestCase {
         XCTAssertTrue(retried)
         XCTAssertNil(tracker.ownership["slack"])
     }
+
+    func testIsHiddenBySwitchTracksOnlyKairosHiddenApps() {
+        var tracker = GroupVisibilityTracker<String>()
+        let hideOthers = GroupSwitch(to: work, behavior: .hide)
+
+        XCTAssertFalse(tracker.isHiddenBySwitch("notes"))
+        tracker.apply(
+            hideOthers,
+            to: [(app: "notes", bundleId: "com.apple.Notes", isHidden: false)],
+            hide: { _ in true },
+            unhide: { _ in true }
+        )
+        XCTAssertTrue(tracker.isHiddenBySwitch("notes"))
+
+        // User re-opens / unhides the app: no longer hidden by switch.
+        tracker.didUnhide("notes", isHidden: false)
+        XCTAssertFalse(tracker.isHiddenBySwitch("notes"))
+
+        // Manual hide is not owned by the switch tracker.
+        tracker.didHide("notes", unhide: { _ in true })
+        XCTAssertFalse(tracker.isHiddenBySwitch("notes"))
+    }
 }

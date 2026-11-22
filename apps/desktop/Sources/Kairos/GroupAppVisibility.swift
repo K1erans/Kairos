@@ -28,4 +28,8 @@ struct GroupAppVisibility {
     mutating func restore() {
         tracker.restoreAll(isHidden: { $0.isHidden }, unhide: { $0.unhide() })
     }
+
+    func isHiddenBySwitch(_ app: NSRunningApplication) -> Bool {
+        tracker.isHiddenBySwitch(app)
+    }
 }

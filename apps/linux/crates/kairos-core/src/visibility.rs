@@ -32,6 +32,11 @@ impl<A: Hash + Eq + Clone> GroupVisibilityTracker<A> {
         GroupVisibilityTracker { ownership: HashMap::new() }
     }
 
+    /// Whether Kairos currently hides (or is hiding) this app for a group switch.
+    pub fn is_hidden_by_switch(&self, app: &A) -> bool {
+        matches!(self.ownership.get(app), Some(Ownership::HideRequested | Ownership::Hidden))
+    }
+
     pub fn apply(&mut self, policy: &GroupSwitch, apps: &[VisibilityApp<A>], hide: &mut dyn FnMut(&A) -> bool, unhide: &mut dyn FnMut(&A) -> bool) {
         let live: std::collections::HashSet<&A> = apps.iter().map(|a| &a.app).collect();
         self.ownership.retain(|k, _| live.contains(k));

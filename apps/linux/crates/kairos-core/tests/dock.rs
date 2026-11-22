@@ -40,12 +40,13 @@ fn open_apps_not_pinned_follow_a_separator() {
     data.groups[0].dock_apps = vec!["a".into(), "b".into()];
     data.focus.active_group_id = Some(data.groups[0].id);
     let r = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
-    let slots = DockGeometry::slots_for(&data, &r(&["b", "x", "a", "y", "x"]));
+    let none = HashSet::new();
+    let slots = DockGeometry::slots_for(&data, &r(&["b", "x", "a", "y", "x"]), &none);
     assert_eq!(slots[slots.len() - 5..].to_vec(), vec![app("a"), app("b"), Slot::Separator, running("x"), running("y")]);
-    assert_eq!(DockGeometry::slots_for(&data, &r(&["a"])).last(), Some(&app("b")), "no separator when every open app is pinned");
+    assert_eq!(DockGeometry::slots_for(&data, &r(&["a"]), &none).last(), Some(&app("b")), "no separator when every open app is pinned");
     assert!(!Slot::Separator.magnifies());
     data.groups[0].dock_apps.clear();
-    let slots = DockGeometry::slots_for(&data, &r(&["x"]));
+    let slots = DockGeometry::slots_for(&data, &r(&["x"]), &none);
     assert_eq!(slots[slots.len() - 3..].to_vec(), vec![Slot::AddApp, Slot::Separator, running("x")]);
 }
 
@@ -53,12 +54,13 @@ fn open_apps_not_pinned_follow_a_separator() {
 fn slots_offer_new_group_and_add_app_for_an_empty_group() {
     let mut data = starter();
     data.settings.shows_dock_folders = false;
-    let slots = DockGeometry::slots_for(&data, &[]);
+    let none = HashSet::new();
+    let slots = DockGeometry::slots_for(&data, &[], &none);
     assert_eq!(slots[..2].to_vec(), vec![Slot::Kairos, Slot::Separator], "Kairos opens from the bar's leading end");
     assert_eq!(slots.iter().filter(|s| **s == Slot::NewGroup).count(), 1);
     assert!(!slots.contains(&Slot::AddApp));
     data.groups[0].dock_apps.clear();
-    let slots = DockGeometry::slots_for(&data, &[]);
+    let slots = DockGeometry::slots_for(&data, &[], &none);
     assert_eq!(slots[slots.len() - 2..].to_vec(), vec![Slot::Divider, Slot::AddApp]);
 }
 
@@ -68,28 +70,36 @@ fn downloads_and_trash_come_last_after_a_separator() {
     data.settings.switch_behavior = SwitchBehavior::Leave;
     data.groups[0].dock_apps = vec!["a".into()];
     data.focus.active_group_id = Some(data.groups[0].id);
-    let slots = DockGeometry::slots_for(&data, &["x".into()]);
+    let none = HashSet::new();
+    let slots = DockGeometry::slots_for(&data, &["x".into()], &none);
     assert_eq!(
         slots[slots.len() - 6..].to_vec(),
         vec![app("a"), Slot::Separator, running("x"), Slot::Separator, Slot::Folder(DockFolder::Downloads), Slot::Folder(DockFolder::Trash)]
     );
     data.settings.shows_dock_folders = false;
-    assert!(!DockGeometry::slots_for(&data, &[]).contains(&Slot::Folder(DockFolder::Trash)));
+    assert!(!DockGeometry::slots_for(&data, &[], &none).contains(&Slot::Folder(DockFolder::Trash)));
 }
 
 #[test]
-fn switching_groups_shows_only_their_pinned_apps_on_the_bar_by_default() {
+fn unpinned_open_apps_show_even_with_hide_on_switch_unless_hidden_by_switch() {
     let mut data = starter();
     data.groups[0].dock_apps = vec!["work".into(), "shared".into()];
     data.groups[1].dock_apps = vec!["study".into(), "shared".into()];
     data.settings.shows_dock_folders = false;
-    let running: Vec<String> = ["work", "study", "shared", "other"].iter().map(|s| s.to_string()).collect();
+    let open: Vec<String> = ["work", "study", "shared", "other"].iter().map(|s| s.to_string()).collect();
     let n = data.groups.len() + 4;
-    let work = DockGeometry::slots_for(&data, &running);
-    assert_eq!(work[n..].to_vec(), vec![app("work"), app("shared")]);
+    let none = HashSet::new();
+    let work_open = DockGeometry::slots_for(&data, &open, &none);
+    assert_eq!(work_open[n..].to_vec(), vec![app("work"), app("shared"), Slot::Separator, running("study"), running("other")]);
+
+    let hidden_study: HashSet<String> = ["study".into()].into_iter().collect();
+    let work_hidden = DockGeometry::slots_for(&data, &open, &hidden_study);
+    assert_eq!(work_hidden[n..].to_vec(), vec![app("work"), app("shared"), Slot::Separator, running("other")]);
+
     data.focus = data.focus_after_switch(data.groups[1].id);
-    let study = DockGeometry::slots_for(&data, &running);
-    assert_eq!(study[n..].to_vec(), vec![app("study"), app("shared")]);
+    let hidden_work: HashSet<String> = ["work".into(), "other".into()].into_iter().collect();
+    let study_hidden = DockGeometry::slots_for(&data, &open, &hidden_work);
+    assert_eq!(study_hidden[n..].to_vec(), vec![app("study"), app("shared")]);
 }
 
 #[test]
@@ -101,12 +111,14 @@ fn a_group_can_leave_other_apps_alone_when_settings_hide_them() {
     data.groups[1].dock_apps = vec!["mail".into()];
     data.groups[1].switch_behavior = Some(SwitchBehavior::Leave);
     let open: Vec<String> = vec!["game".into()];
+    let hidden_game: HashSet<String> = ["game".into()].into_iter().collect();
+    let none = HashSet::new();
     data.focus.active_group_id = Some(data.groups[0].id);
     assert_eq!(data.active_switch_behavior(), SwitchBehavior::Hide);
-    assert!(!DockGeometry::slots_for(&data, &open).contains(&running("game")));
+    assert!(!DockGeometry::slots_for(&data, &open, &hidden_game).contains(&running("game")));
     data.focus = data.focus_after_switch(data.groups[1].id);
     assert_eq!(data.active_switch_behavior(), SwitchBehavior::Leave);
-    assert!(DockGeometry::slots_for(&data, &open).contains(&running("game")));
+    assert!(DockGeometry::slots_for(&data, &open, &none).contains(&running("game")));
 }
 
 #[test]

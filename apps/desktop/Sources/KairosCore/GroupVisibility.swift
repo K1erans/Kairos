@@ -18,6 +18,14 @@ public struct GroupVisibilityTracker<App: Hashable> {
 
     public init() {}
 
+    /// Whether Kairos currently hides (or is hiding) this app for a group switch.
+    public func isHiddenBySwitch(_ app: App) -> Bool {
+        switch ownership[app] {
+        case .hideRequested?, .hidden?: return true
+        case .restoreRequested?, nil: return false
+        }
+    }
+
     /// Reconciles visibility against a group switch policy.
     public mutating func apply(
         _ policy: GroupSwitch,

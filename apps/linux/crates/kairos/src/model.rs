@@ -125,6 +125,8 @@ pub struct State {
     pub running_ids: HashSet<String>,
     /// Open apps' ids in launch order, without Kairos.
     pub open_apps: Vec<String>,
+    /// Open apps currently hidden by Kairos for a group switch, kept off Kairos Bar until opened again.
+    pub hidden_by_switch: HashSet<String>,
     pub page: Page,
     pub selected_group_id: Option<Id>,
     pub rename_group_id: Option<Id>,
@@ -312,6 +314,7 @@ impl Model {
             running: vec![],
             running_ids: HashSet::new(),
             open_apps: vec![],
+            hidden_by_switch: HashSet::new(),
             page: Page::Today,
             selected_group_id: None,
             rename_group_id: None,
@@ -1181,17 +1184,25 @@ impl Model {
                 }
             }
         }
+        let hidden_by_switch = self.hidden_by_switch_ids(&list);
         let changed = {
             let s = self.s();
-            s.running != list || s.open_apps != open
+            s.running != list || s.open_apps != open || s.hidden_by_switch != hidden_by_switch
         };
         if changed {
             self.set(change::RUNNING, |s| {
                 s.running = list;
                 s.running_ids = ids;
                 s.open_apps = open;
+                s.hidden_by_switch = hidden_by_switch;
             });
         }
+    }
+
+    fn hidden_by_switch_ids(&self, list: &[RunningApp]) -> HashSet<String> {
+        let tracker = self.visibility.borrow();
+        let visible: HashSet<&str> = list.iter().filter(|a| !tracker.is_hidden_by_switch(&a.key())).map(|a| a.id.as_str()).collect();
+        list.iter().filter(|a| !visible.contains(a.id.as_str())).map(|a| a.id.clone()).collect()
     }
 
     fn hide_key(&self, list: &[RunningApp], key: &str) -> bool {
@@ -1210,12 +1221,16 @@ impl Model {
         };
         let entries: Vec<VisibilityApp<String>> = list.iter().map(|a| VisibilityApp { app: a.key(), app_id: Some(a.id.as_str()), is_hidden: a.hidden }).collect();
         self.visibility.borrow_mut().apply(&policy, &entries, &mut |k| self.hide_key(&list, k), &mut |k| self.unhide_key(&list, k));
+        let hidden = self.hidden_by_switch_ids(&list);
+        self.state.borrow_mut().hidden_by_switch = hidden;
     }
 
     fn restore_visibility(&self) {
         let list = self.apps.running();
         let hidden: HashMap<String, bool> = list.iter().map(|a| (a.key(), a.hidden)).collect();
         self.visibility.borrow_mut().restore_all(&|k| hidden.get(k).copied().unwrap_or(false), &mut |k| self.unhide_key(&list, k));
+        let hidden = self.hidden_by_switch_ids(&list);
+        self.state.borrow_mut().hidden_by_switch = hidden;
     }
 
     // MARK: App guard
