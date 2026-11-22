@@ -13,25 +13,31 @@ final class DockFolderTests: XCTestCase {
         XCTAssertFalse(DockGeometry.slots(for: data).contains(.folder(.trash)))
     }
 
-    func testUnpinnedOpenAppsShowEvenWithHideOnSwitchUnlessHiddenBySwitch() {
+    func testUnpinnedOpenAppsShowEvenWithHideOnSwitchUnlessInAnotherGroupOrHiddenBySwitch() {
         var data = AppData.starter()
         data.groups[0].dockApps = ["work", "shared"]
         data.groups[1].dockApps = ["study", "shared"]
         data.settings.showsDockFolders = false
         let running = ["work", "study", "shared", "other"]
 
-        // Default switchBehavior is .hide: opening an unpinned app still shows it on the bar.
+        // Default switchBehavior is .hide: apps in another group ("study") stay off Work's bar,
+        // while open apps not in any group ("other") still appear.
         let workOpen = DockGeometry.slots(for: data, running: running)
-        XCTAssertEqual(Array(workOpen.dropFirst(data.groups.count + 2)), [.app("work"), .app("shared"), .separator, .running("study"), .running("other")])
+        XCTAssertEqual(Array(workOpen.dropFirst(data.groups.count + 2)), [.app("work"), .app("shared"), .separator, .running("other")])
 
-        // Apps hidden by Kairos on a group switch stay off the bar, while an unpinned app opened
-        // in the active group still appears.
-        let workHidden = DockGeometry.slots(for: data, running: running, hidden: ["study"])
-        XCTAssertEqual(Array(workHidden.dropFirst(data.groups.count + 2)), [.app("work"), .app("shared"), .separator, .running("other")])
+        // If "other" was hidden by Kairos on a group switch, it stays off the bar until opened again.
+        let workHidden = DockGeometry.slots(for: data, running: running, hidden: ["other"])
+        XCTAssertEqual(Array(workHidden.dropFirst(data.groups.count + 2)), [.app("work"), .app("shared")])
 
+        // Switching to Study keeps Work's app off Study's bar while still showing ungrouped "other".
         data.focus = data.focusAfterSwitch(to: data.groups[1].id)
-        let studyHidden = DockGeometry.slots(for: data, running: running, hidden: ["work", "other"])
-        XCTAssertEqual(Array(studyHidden.dropFirst(data.groups.count + 2)), [.app("study"), .app("shared")])
+        let studyOpen = DockGeometry.slots(for: data, running: running)
+        XCTAssertEqual(Array(studyOpen.dropFirst(data.groups.count + 2)), [.app("study"), .app("shared"), .separator, .running("other")])
+
+        // With switchBehavior == .leave, another group's open app shows too.
+        data.settings.switchBehavior = .leave
+        let studyLeave = DockGeometry.slots(for: data, running: running)
+        XCTAssertEqual(Array(studyLeave.dropFirst(data.groups.count + 2)), [.app("study"), .app("shared"), .separator, .running("work"), .running("other")])
     }
 
     func testEveryItemOnTheBarHasItsOwnKeyEvenWithTwoSeparators() {

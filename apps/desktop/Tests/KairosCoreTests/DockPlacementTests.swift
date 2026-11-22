@@ -72,4 +72,16 @@ final class DockPlacementTests: XCTestCase {
         let withDock = CGRect(x: 0, y: 70, width: 1470, height: 852)
         XCTAssertEqual(frame(.bottom, visible: withDock).minY, 70)
     }
+
+    func testReplacingTheSystemDockSitsOnTheScreenEdgeEvenIfMacOSReservesAStrip() {
+        let reserved = CGRect(x: 0, y: 36, width: 1470, height: 887)
+        let bottom = DockPlacement.frame(edge: .bottom, size: size, barMid: 280,
+                                         screen: screen, visible: reserved, menuBar: 33, replacesDock: true)
+        XCTAssertEqual(bottom.minY, 0)
+        XCTAssertEqual(bottom.minX + 280, screen.midX)
+        let left = DockPlacement.frame(edge: .left, size: CGSize(width: size.height, height: size.width), barMid: 280,
+                                       screen: screen, visible: CGRect(x: 36, y: 0, width: 1434, height: 923),
+                                       menuBar: 33, replacesDock: true)
+        XCTAssertEqual(left.minX, 0)
+    }
 }

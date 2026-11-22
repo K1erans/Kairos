@@ -243,7 +243,7 @@ final class DockPanelController {
             .map(DockFrame.init)
             .sink { [weak self] frame in self?.tracker.frame = frame; self?.layout() }
             .store(in: &cancellables)
-        model.$data.map(\.settings.dockVisible).removeDuplicates()
+        model.$data.map { [$0.settings.dockVisible, $0.settings.replacesSystemDock] }.removeDuplicates()
             .sink { [weak self] _ in DispatchQueue.main.async { self?.layout() } }
             .store(in: &cancellables)
         NotificationCenter.default.publisher(for: NSApplication.didChangeScreenParametersNotification)
@@ -295,12 +295,14 @@ final class DockPanelController {
     /// calls that change something. A Space change alone changes nothing (DockPlacement).
     private func layout() {
         var target: CGRect?
+        let replacesDock = model.data.settings.hidesSystemDock
         if model.data.settings.dockVisible, let screen {
             let f = tracker.frame
             let top = screen.frame.maxY - screen.visibleFrame.maxY
             if top > 0 { menuBar = top }
             target = DockPlacement.frame(edge: f.edge, size: f.size, barMid: f.lead + f.geometry.restLength / 2,
-                                         screen: screen.frame, visible: screen.visibleFrame, menuBar: menuBar)
+                                         screen: screen.frame, visible: screen.visibleFrame, menuBar: menuBar,
+                                         replacesDock: replacesDock)
         }
         for step in DockPlacement.steps(from: panel.isVisible ? panel.frame : nil, to: target) {
             switch step {
@@ -310,7 +312,7 @@ final class DockPanelController {
             }
         }
         if let screen, panel.isVisible {
-            let f = tracker.frame, fr = panel.frame, v = screen.visibleFrame
+            let f = tracker.frame, fr = panel.frame, v = replacesDock ? screen.frame : screen.visibleFrame
             let (lo, hi) = f.edge == .bottom ? (v.minX - fr.minX, v.maxX - fr.minX) : (fr.maxY - v.maxY, fr.maxY - v.minY)
             let bounds = max(0, lo)...max(max(0, lo), min(f.axisLength, hi))
             if tracker.labelBounds != bounds { tracker.labelBounds = bounds }

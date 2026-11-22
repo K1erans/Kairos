@@ -7,17 +7,21 @@ import Foundation
 public enum DockPlacement {
     /// The panel's frame for a panel of `size` whose bar, at rest, is centred `barMid` along it.
     /// `screen` is the whole display and `visible` the part macOS leaves free of its Dock and
-    /// menu bar. The top of `visible` is replaced by `menuBar` below the screen's top, because
-    /// the menu bar hides in a full-screen app's Space and a side bar must not move with it.
+    /// menu bar. When `replacesDock` is true, Kairos is hiding the system Dock so the bar sits
+    /// against `screen`'s edge even if macOS still reserves a Dock strip in `visible`. The top
+    /// of `visible` is replaced by `menuBar` below the screen's top, because the menu bar hides
+    /// in a full-screen app's Space and a side bar must not move with it.
     public static func frame(edge: DockEdge, size: CGSize, barMid: Double,
-                             screen: CGRect, visible: CGRect, menuBar: Double) -> CGRect {
+                             screen: CGRect, visible: CGRect, menuBar: Double,
+                             replacesDock: Bool = false) -> CGRect {
+        let area = replacesDock ? screen : visible
         let top = screen.maxY - menuBar
-        let midY = (visible.minY + top) / 2
+        let midY = (area.minY + top) / 2
         var origin: CGPoint
         switch edge {
-        case .left: origin = CGPoint(x: visible.minX, y: midY + barMid - size.height)
-        case .right: origin = CGPoint(x: visible.maxX - size.width, y: midY + barMid - size.height)
-        case .bottom: origin = CGPoint(x: visible.midX - barMid, y: visible.minY)
+        case .left: origin = CGPoint(x: area.minX, y: midY + barMid - size.height)
+        case .right: origin = CGPoint(x: area.maxX - size.width, y: midY + barMid - size.height)
+        case .bottom: origin = CGPoint(x: area.midX - barMid, y: area.minY)
         }
         if edge == .bottom {
             origin.x = min(max(origin.x, screen.minX), screen.maxX - size.width)

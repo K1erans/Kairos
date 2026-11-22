@@ -81,7 +81,7 @@ fn downloads_and_trash_come_last_after_a_separator() {
 }
 
 #[test]
-fn unpinned_open_apps_show_even_with_hide_on_switch_unless_hidden_by_switch() {
+fn unpinned_open_apps_show_even_with_hide_on_switch_unless_in_another_group_or_hidden_by_switch() {
     let mut data = starter();
     data.groups[0].dock_apps = vec!["work".into(), "shared".into()];
     data.groups[1].dock_apps = vec!["study".into(), "shared".into()];
@@ -90,16 +90,19 @@ fn unpinned_open_apps_show_even_with_hide_on_switch_unless_hidden_by_switch() {
     let n = data.groups.len() + 4;
     let none = HashSet::new();
     let work_open = DockGeometry::slots_for(&data, &open, &none);
-    assert_eq!(work_open[n..].to_vec(), vec![app("work"), app("shared"), Slot::Separator, running("study"), running("other")]);
+    assert_eq!(work_open[n..].to_vec(), vec![app("work"), app("shared"), Slot::Separator, running("other")]);
 
-    let hidden_study: HashSet<String> = ["study".into()].into_iter().collect();
-    let work_hidden = DockGeometry::slots_for(&data, &open, &hidden_study);
-    assert_eq!(work_hidden[n..].to_vec(), vec![app("work"), app("shared"), Slot::Separator, running("other")]);
+    let hidden_other: HashSet<String> = ["other".into()].into_iter().collect();
+    let work_hidden = DockGeometry::slots_for(&data, &open, &hidden_other);
+    assert_eq!(work_hidden[n..].to_vec(), vec![app("work"), app("shared")]);
 
     data.focus = data.focus_after_switch(data.groups[1].id);
-    let hidden_work: HashSet<String> = ["work".into(), "other".into()].into_iter().collect();
-    let study_hidden = DockGeometry::slots_for(&data, &open, &hidden_work);
-    assert_eq!(study_hidden[n..].to_vec(), vec![app("study"), app("shared")]);
+    let study_open = DockGeometry::slots_for(&data, &open, &none);
+    assert_eq!(study_open[n..].to_vec(), vec![app("study"), app("shared"), Slot::Separator, running("other")]);
+
+    data.settings.switch_behavior = SwitchBehavior::Leave;
+    let study_leave = DockGeometry::slots_for(&data, &open, &none);
+    assert_eq!(study_leave[n..].to_vec(), vec![app("study"), app("shared"), Slot::Separator, running("work"), running("other")]);
 }
 
 #[test]
