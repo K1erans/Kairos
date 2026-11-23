@@ -1,143 +1,130 @@
 # Kairos
 
-A focus app for Mac and Linux Mint, with two Chrome extensions.
+A native focus, distraction-blocking, and reading system for **macOS** (Swift / SwiftUI) and **Linux Mint** (Rust / GTK 4 on Cinnamon X11), paired with two Chromium extensions over a native-messaging Unix-socket bridge.
 
-- **Kairos Desktop** (`apps/desktop`): tasks, groups, a Pomodoro timer with Focus, Break and
-  Strict modes, Kairos Bar (a dock for the active group), app blocking, and Jev, an AI check that
-  asks whether what is on screen fits the task you are working on.
-- **Kairos for Linux** (`apps/linux`): Kairos Desktop for Linux Mint (Cinnamon, X11), in Rust and
-  GTK 4. See `apps/linux/README.md` to build and install it.
-- **Kairos Shield** (`extensions/shield`): blocks sites and hides page elements in the browser
-  while you focus. Without it Kairos cannot block any site.
-- **Kairos Read** (`extensions/read`): reads articles aloud and builds 3D scenes from them.
-- `packages/shared/PROTOCOL.md` is the message contract between the app and the extensions.
+## Architecture and components
 
-Kairos Desktop needs macOS 14 or later. The extensions run in Chromium browsers (Chrome, Brave,
-Arc, Edge, Vivaldi); Safari and Firefox cannot run them.
+- **Kairos Desktop for macOS (`apps/desktop`).** Tasks, task groups, a Pomodoro timer with **Focus**, **Break**, and **Strict** modes, **Kairos Bar** (a context-switching dock that shows only the active group's apps and can replace the macOS Dock), native app blocking, and **Jev**, an AI relevance check that evaluates whether the front window or active browser tab fits your current task.
+- **Kairos for Linux Mint (`apps/linux`).** A feature-complete Rust and GTK 4 implementation for Cinnamon on X11 (`kairos-core`, `kairos-host`, and `kairos`). It shares the macOS app's JSON data format (`kairos.json`), bridge protocol, and TLA+ specification. See [`apps/linux/README.md`](apps/linux/README.md) for Linux build details and Mac-to-Cinnamon mappings.
+- **Kairos Shield (`extensions/shield`).** Enforces site block/allow rules, hides distracting page elements via CSS selectors, and runs Jev page relevance checks inside Chromium browsers. During a locked Strict session (`strictUntil`), Shield continues enforcing even if the desktop app is closed.
+- **Kairos Read (`extensions/read`).** Extracts articles, narrates them sentence by sentence (using local system voices, OpenAI, or ElevenLabs with next-sentence prefetching), and generates interactive **Three.js 3D scenes** with Claude that highlight components in sync with the narrated sentence.
+- **Native messaging protocol (`packages/shared/PROTOCOL.md`).** The bidirectional JSON contract between the extensions, the native messaging host (`com.kairos.host`), and the desktop app's Unix domain socket.
 
-## Build
+## Why Kairos
+
+Most focus blockers fail at two boundaries:
+
+1. **Static blocklists miss context, while blanket blocks break work.** A site like YouTube, GitHub, or Reddit can be either essential documentation or a distraction depending on the task. Kairos layers fast deterministic rules (domain block/allow lists, CSS element hiding, app blocklists) ahead of TypeSafe's **Jev** model, which checks the active page's title, URL, description, and excerpt against the task you are working on.
+2. **State-machine edge cases let you escape "Strict" mode or leave your desktop broken.** In a focus app with a mode picker, a Pomodoro timer, temporary 5-minute overrides, per-group rule editors, quit handlers, and system Dock replacement, bugs hide in multi-step interleavings (for example: granting a 5-minute override in Focus mode and then switching to Strict, or crashing while the macOS Dock is hidden and losing saved preferences).
+
+To prevent those bugs, Kairos formally specifies and model-checks its two most critical state machines in **TLA+** (`verification/strict-mode/` and `verification/system-dock/`), with every transition anchored line-by-line to both the Swift macOS code and the Rust Linux code.
+
+## Formal verification (TLA+)
+
+### 1. Strict mode state machine (`verification/strict-mode/StrictMode.tla`)
+
+Checks every interleaving of mode changes, timer transitions, pause/resume, 5-minute override requests, rule edits, group switches, quitting, force-quitting, and relaunching against `anchors.tsv` (macOS Swift) and `anchors-linux.tsv` (Linux Rust):
+
+| Invariant | Guarantee | Status |
+|---|---|---|
+| `StrictNoGrant` | While the mode is Strict, no temporary "Allow 5 min" override grant is ever active. | `PASS` |
+| `StrictNoEscape` | No user action (including quitting, force-quitting, and relaunching) exits a locked strict focus phase before the clock runs out. | `PASS` |
+| `QuitRefusedInStrict` | Ordinary Quit commands (menu bar, app menu, `Cmd+Q`, tray menu) are refused during a strict focus phase. | `PASS` |
+| `UsedBounded` | At most `maxOverridesPerSession` overrides can be granted between two ledger resets. | `PASS` |
+| `ModeMatchesTimer` | While a timer runs, the blocking mode pushed to the browser extensions matches the timer phase. | `PASS` |
+| `StrictRulesHold` | No edit on the Rules page, Kairos Bar, or Kairos Shield can loosen the active group's blocking rules during a strict focus phase (adding stricter blocks remains allowed). | `PASS` |
+| `StrictKeepsGroup` | Tracks whether switching to another task group during Strict can activate a looser rule set (documented design trade-off in `expected.tsv`). | Tracked |
+
+### 2. System Dock and Cinnamon panel takeover (`verification/system-dock/`)
+
+`SystemDock.tla` (macOS) and `CinnamonPanel.tla` (Linux Mint) verify that hiding the system Dock or Cinnamon panels across crashes, preference loss, concurrent watchdog firing, and manual System Settings changes never traps the user without a way back:
+
+| Invariant | Guarantee | Status |
+|---|---|---|
+| `NeverSavesOwn` | Kairos never records its own hidden auto-hide setting as the user's original Dock or panel setting. | `PASS` |
+| `WayBack` | Whenever the system Dock or panel is hidden by Kairos, the on-disk recovery script holds a valid restore configuration. | `PASS` |
+| `WatchdogCovers` | Whenever the system Dock or panel is hidden and Kairos is not running, the LaunchAgent / `systemd` watchdog is armed. | `PASS` |
+| `BackWhenNotReplacing` | Whenever Kairos is running with Kairos Bar hidden or Dock replacement turned off, the user's Dock or panel is restored. | `PASS` |
+| `LeavesOwnersPanel` | (Linux) The recovery script never overwrites a panel configuration the user changed after restoration. | `PASS` |
+
+Run both verification suites (including mutation tests that toggle off each guard constant and prove TLC finds a counterexample trace):
+
+```sh
+verification/strict-mode/check.sh --all --mutants   # checks macOS Swift + Linux Rust anchors and invariants
+verification/system-dock/check.sh --all --mutants   # checks SystemDock.tla + CinnamonPanel.tla and mutants
+```
+
+Requires Java (`brew install openjdk` or `apt install openjdk-21-jre`); `strict-mode/check.sh` downloads a checksum-pinned `tla2tools.jar` on first run.
+
+## Build and install
+
+### macOS (`apps/desktop`, macOS 14+, Swift 5.10)
 
 ```sh
 apps/desktop/scripts/build-app.sh
 open apps/desktop/build/Kairos.app
 ```
 
-This needs Xcode or the Command Line Tools (Swift 5.10). With a Developer ID certificate in your
-keychain the app is signed with it, so Keychain and Accessibility permissions stay granted across
-rebuilds; without one it is signed ad hoc and macOS may ask again after a rebuild.
-
-## Install
+To install into `/Applications/Kairos.app` and point all detected Chromium browsers' native messaging manifests (`com.kairos.host`) at the installed copy:
 
 ```sh
 apps/desktop/scripts/build-app.sh --install
 ```
 
-This builds, copies the app to `/Applications/Kairos.app` (the copy in `apps/desktop/build` stays),
-points the browsers' native messaging manifests at the installed copy, and prints the steps to
-switch over: quit the running Kairos (not possible during a strict session until it ends), open
-`/Applications/Kairos.app`, and turn "Open Kairos at login" off and on again if you use it.
+If a Developer ID certificate is present in your Keychain, the build script signs the app with it so Keychain and Accessibility permissions persist across rebuilds; otherwise it signs ad hoc.
 
-## Load the extensions
-
-1. Open `chrome://extensions` (Brave: `brave://extensions`, Edge: `edge://extensions`).
-2. Turn on Developer mode.
-3. Choose "Load unpacked" and pick `extensions/shield`, then again for `extensions/read`.
-   Settings > Chrome bridge > "Show extensions in Finder" opens the copies inside the app.
-
-When it starts and no browser points at it yet, Kairos Desktop writes the native messaging manifest
-(`com.kairos.host`) for every Chromium browser it finds; Settings > Chrome bridge > "Install bridge"
-does it on demand. Settings
-shows which extensions are connected. While blocking is on and no Shield is connected, Today, the
-menu bar menu and Kairos Bar say that site blocking is off.
-
-## Keys
-
-All optional. Paste them in Settings > API keys; they are stored in your login Keychain.
-
-| Key | For | Without it |
-| --- | --- | --- |
-| TypeSafe | Jev (https://docs.typesafe.ai) | Only your block and allow lists apply |
-| Anthropic | 3D scenes in Kairos Read, when Settings > 3D scenes is set to "Anthropic API key" | Scenes use your Claude subscription (below) |
-| ElevenLabs or OpenAI | Cloud voices in Kairos Read (Settings > Reading voice) | Mac voices, which are free |
-
-Sites on Settings > Privacy > "Never send off this Mac" are never sent to Jev, a cloud voice or
-Claude.
-
-## 3D scenes
-
-Kairos Read's 3D scenes are written by Claude. By default (Settings > 3D scenes > "Claude
-subscription") they go through Claude Code on the Claude subscription this Mac is logged in to,
-with no API key: Kairos runs `scene-agent.mjs`, a small Claude Agent SDK helper that
-`scripts/build-app.sh` puts inside Kairos.app with its packages (`npm ci`). It needs:
-
-- Node.js. Kairos looks in `/opt/homebrew/bin`, `/usr/local/bin`, Volta and nvm, then asks your
-  login shell, so a Node installed any usual way is found even though Kairos is opened from Finder.
-- Claude Code logged in once: run `claude` in Terminal, then `/login`.
-
-Today's setup list shows "Claude subscription ready" once Node and the helper are found; a scene
-that fails because Claude Code is not logged in says how to log in. "Anthropic API key" uses the
-key under API keys instead. Cancel in Kairos Read stops the build in Kairos too. For a development
-build run with `swift run`, run `npm ci` in `apps/desktop/scene-agent` and set
-`KAIROS_SCENE_AGENT` to that folder's `scene-agent.mjs`.
-
-## Permissions
-
-- **Accessibility**: lets Jev read the front window's title, and lets Kairos switch desktops with
-  Control-number. Settings > Blocking > "Read window titles" asks for it.
-- **Notifications**: for the end of a focus session or break. When a break ends the timer waits
-  for you to start the next focus session, unless Settings > Timer > "Start the next focus session
-  automatically" is on.
-  Kairos also notifies you when a task is due (Settings > General). macOS keeps at most 64 waiting
-  notifications per app, so Kairos schedules the soonest 64 and adds later ones as those pass.
-- **Open at login**: Settings > General.
-- **Use Kairos Bar instead of the macOS Dock** (Settings > Kairos Bar) hides the Dock with its own
-  auto-hide settings and puts them back when turned off or when Kairos quits. While it is on, a
-  small LaunchAgent (`com.kairos.dock-watchdog`) brings the Dock back if Kairos stops without doing
-  it, and is removed when the switch is turned off.
-
-Kairos Bar ends with Downloads and Trash, as the Dock does. Files dropped on Trash go to the
-Trash, documents dropped on an app open in it, and an app dropped anywhere else joins the active
-group. Change the order of a group's apps from an app's menu on the bar or on the Groups page.
-Kairos Bar shows no unread badges: macOS has no public way to read another app's Dock badge.
-
-Press Option-Space anywhere to add a task, and Option-Shift-Space to start or pause the timer.
-Settings > General changes or turns off both shortcuts. Control-1 to Control-9 can switch groups;
-that is off for new profiles because macOS can use those keys to switch desktops.
-
-## Tests
+### Linux Mint (`apps/linux`, Cinnamon on X11, Rust + GTK 4)
 
 ```sh
-cd apps/desktop
-swift test                          # the app's logic
-python3 scripts/bridge-check.py     # drives a built app through its native host, Chrome's way
-scripts/snapshot.sh /tmp/kairos     # renders every screen and Kairos Bar state to PNG
+apps/linux/scripts/install.sh
+```
 
+Installs any missing GTK 4, GStreamer, and D-Bus development packages, compiles a release binary into `~/.local/lib/kairos`, links `~/.local/bin/kairos`, registers the desktop entry, and writes native messaging manifests for Chrome, Chromium, Brave, Edge, and Vivaldi. See [`apps/linux/README.md`](apps/linux/README.md) for full details.
+
+### Load the browser extensions
+
+The extensions run in Chromium browsers (Chrome, Brave, Arc, Edge, Vivaldi):
+
+1. Open `chrome://extensions` (or `brave://extensions`, `edge://extensions`).
+2. Enable **Developer mode**.
+3. Click **Load unpacked** and select `extensions/shield`, then repeat for `extensions/read` (or use **Settings > Chrome bridge > Show extensions in Finder**).
+
+When Kairos starts, it registers the native messaging host (`com.kairos.host`) automatically; **Settings > Chrome bridge** shows live connection status for both extensions.
+
+## API keys, 3D scenes, and privacy
+
+All API keys are optional and stored in your login Keychain (macOS) or Secret Service keyring (Linux) under **Settings > API keys**:
+
+| Integration | Used for | Fallback without an API key |
+|---|---|---|
+| **TypeSafe** | Jev on-screen relevance checks (`https://docs.typesafe.ai`) | Deterministic site and app block/allow lists still apply |
+| **Claude / Anthropic** | Interactive Three.js 3D scenes in Kairos Read | Uses your local **Claude Code subscription** (`claude` CLI + Node.js via `scene-agent.mjs`) with no API key |
+| **ElevenLabs / OpenAI** | Cloud narration voices in Kairos Read | Local system voices (free) |
+
+**Privacy guard (`neverAnalyse`):** Any hostname listed under **Settings > Privacy > Never send off this Mac** is excluded from Jev checks, cloud TTS narration, and 3D scene generation. Both the extensions and the desktop host enforce this list independently.
+
+## Permissions and shortcuts
+
+- **Accessibility (macOS):** Lets Jev read the front window's title and lets Kairos switch desktop Spaces. Prompted from **Settings > Blocking > Read window titles**.
+- **Notifications:** Alerts you when a focus session or break ends and when tasks come due (scheduling the soonest 64 notifications within macOS's per-app limit and rolling later ones in as earlier ones fire).
+- **Use Kairos Bar instead of the macOS Dock / Cinnamon panel:** Hides the system Dock or panel while Kairos Bar is active and arms `com.kairos.dock-watchdog` (macOS LaunchAgent) or a `systemd` user timer (Linux) to restore it within seconds if Kairos terminates unexpectedly.
+- **Global shortcuts:** `Option+Space` adds a task from anywhere; `Option+Shift+Space` starts or pauses the timer; `Control+1` through `Control+9` can switch task groups (configurable under **Settings > General**).
+
+## Testing
+
+```sh
+# macOS app logic, native-messaging bridge end-to-end check, and UI snapshot renderer
+cd apps/desktop
+swift test
+python3 scripts/bridge-check.py
+scripts/snapshot.sh /tmp/kairos
+
+# Linux core and native host (runs on both macOS and Linux)
+(cd apps/linux && cargo test)
+
+# Chromium extensions
 (cd extensions/shield && node --test)
 (cd extensions/read && node --test)
 ```
 
-`bridge-check.py` and `snapshot.sh` run Kairos against a scratch profile (`KAIROS_HOME`), so they
-never touch your data, your browser manifests, the Dock, your Keychain or Notification Center.
-`bridge-check.py` runs a copy of the app made by `scripts/scratch-copy.sh` under its own bundle id,
-so the window sizes it saves never land in your Kairos settings. It works from any directory and
-checks `apps/desktop/build/Kairos.app` unless given another path.
-
-Kairos keeps its data in `~/Library/Application Support/Kairos/kairos.json`. Set `KAIROS_HOME` to
-another folder to run a separate copy with its own data and socket.
-Settings > Data exports it all as JSON. Import replaces it with an exported file after saving a
-copy of the current one beside it as `kairos-backup-<date>-<time>.json`; it waits while a timer
-runs. Session and block history older than 400 days is dropped, and so is anything past 20,000
-sessions or 5,000 block events.
-
-## Verification
-
-Strict mode (no overrides, no stopping, no quitting until the session ends) is described as a
-TLA+ model in `verification/strict-mode`, with each step tied to a line of code.
-
-```sh
-verification/strict-mode/check.sh            # anchors, then every property
-verification/strict-mode/check.sh --mutants  # also shows each property fails on a broken variant
-```
-
-It needs Java (`brew install openjdk`) and downloads TLC once. When you change the mode, the timer,
-overrides or quitting, follow `.claude/skills/verify-strict-mode/SKILL.md`.
+`bridge-check.py` and `snapshot.sh` run against an isolated `KAIROS_HOME` scratch profile and a separate bundle ID (`scripts/scratch-copy.sh`), so they never touch your live `~/Library/Application Support/Kairos/kairos.json` data, browser manifests, Keychain, Dock, or Notification Center.
