@@ -15,6 +15,9 @@ public struct GroupVisibilityTracker<App: Hashable> {
     }
 
     public private(set) var ownership: [App: Ownership] = [:]
+    /// Which group an app was visible in when Kairos hid it, so returning to that group restores
+    /// ungrouped open apps that were hidden on the way out.
+    public private(set) var hiddenFrom: [App: UUID] = [:]
 
     public init() {}
 
@@ -29,18 +32,22 @@ public struct GroupVisibilityTracker<App: Hashable> {
     /// Reconciles visibility against a group switch policy.
     public mutating func apply(
         _ policy: GroupSwitch,
+        fromGroup: UUID? = nil,
         to apps: [(app: App, bundleId: String?, isHidden: Bool)],
         hide: (App) -> Bool,
         unhide: (App) -> Bool
     ) {
         let live = Set(apps.map(\.app))
         ownership = ownership.filter { live.contains($0.key) }
+        hiddenFrom = hiddenFrom.filter { live.contains($0.key) }
 
         var toRestore: [(app: App, isHidden: Bool)] = []
         for entry in apps {
             let owned = ownership[entry.app] != nil
-            switch policy.action(for: entry.bundleId, isHidden: entry.isHidden, hiddenBySwitch: owned) {
+            let fromDest = policy.groupId != nil && hiddenFrom[entry.app] == policy.groupId
+            switch policy.action(for: entry.bundleId, isHidden: entry.isHidden, hiddenBySwitch: owned, hiddenFromDestination: fromDest) {
             case .hide:
+                if hiddenFrom[entry.app] == nil, let fromGroup { hiddenFrom[entry.app] = fromGroup }
                 ownership[entry.app] = hide(entry.app) ? .hidden : .hideRequested
             case .unhide:
                 toRestore.append((entry.app, entry.isHidden))
@@ -66,6 +73,7 @@ public struct GroupVisibilityTracker<App: Hashable> {
         case .restoreRequested?:
             if unhide(app) {
                 ownership.removeValue(forKey: app)
+                hiddenFrom.removeValue(forKey: app)
             } else {
                 ownership[app] = .hidden
             }
@@ -80,6 +88,7 @@ public struct GroupVisibilityTracker<App: Hashable> {
         switch ownership[app] {
         case .hidden?, .restoreRequested?:
             ownership.removeValue(forKey: app)
+            hiddenFrom.removeValue(forKey: app)
         case .hideRequested?, nil:
             break
         }
@@ -88,6 +97,7 @@ public struct GroupVisibilityTracker<App: Hashable> {
     /// Drops ownership when an app terminates.
     public mutating func didTerminate(_ app: App) {
         ownership.removeValue(forKey: app)
+        hiddenFrom.removeValue(forKey: app)
     }
 
     /// Restores all apps currently owned by Kairos (e.g. on shutdown or when disabling hiding).
@@ -106,6 +116,7 @@ public struct GroupVisibilityTracker<App: Hashable> {
             if isHidden {
                 if unhide(app) {
                     ownership.removeValue(forKey: app)
+                    hiddenFrom.removeValue(forKey: app)
                 } else {
                     ownership[app] = .restoreRequested
                 }
@@ -117,11 +128,13 @@ public struct GroupVisibilityTracker<App: Hashable> {
             if isHidden {
                 if unhide(app) {
                     ownership.removeValue(forKey: app)
+                    hiddenFrom.removeValue(forKey: app)
                 } else {
                     ownership[app] = .restoreRequested
                 }
             } else {
                 ownership.removeValue(forKey: app)
+                hiddenFrom.removeValue(forKey: app)
             }
         case nil:
             break

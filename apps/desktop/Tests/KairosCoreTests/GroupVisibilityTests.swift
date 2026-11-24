@@ -171,4 +171,48 @@ final class GroupVisibilityTests: XCTestCase {
         tracker.didHide("notes", unhide: { _ in true })
         XCTAssertFalse(tracker.isHiddenBySwitch("notes"))
     }
+
+    func testSwitchingToStudyAndBackToPersonalRestoresUngroupedOpenApps() {
+        var study = AppGroup(name: "Study")
+        study.dockApps = ["com.study.Reader"]
+        var personal = AppGroup(name: "Personal")
+        personal.dockApps = ["com.chat.Discord"]
+
+        var tracker = GroupVisibilityTracker<String>()
+        let toStudy = GroupSwitch(to: study, behavior: .hide, otherGroupApps: Set(personal.dockApps))
+        let toPersonal = GroupSwitch(to: personal, behavior: .hide, otherGroupApps: Set(study.dockApps))
+
+        // Leaving Personal for Study hides both Personal's app and ungrouped Spotify.
+        var hidden: Set<String> = []
+        tracker.apply(
+            toStudy,
+            fromGroup: personal.id,
+            to: [
+                (app: "discord", bundleId: "com.chat.Discord", isHidden: false),
+                (app: "spotify", bundleId: "com.spotify.client", isHidden: false),
+                (app: "reader", bundleId: "com.study.Reader", isHidden: false),
+            ],
+            hide: { hidden.insert($0); return true },
+            unhide: { hidden.remove($0); return true }
+        )
+        XCTAssertEqual(hidden, ["discord", "spotify"])
+        XCTAssertTrue(tracker.isHiddenBySwitch("spotify"))
+
+        // Switching back to Personal restores both Discord and ungrouped Spotify, and hides Reader.
+        tracker.apply(
+            toPersonal,
+            fromGroup: study.id,
+            to: [
+                (app: "discord", bundleId: "com.chat.Discord", isHidden: true),
+                (app: "spotify", bundleId: "com.spotify.client", isHidden: true),
+                (app: "reader", bundleId: "com.study.Reader", isHidden: false),
+            ],
+            hide: { hidden.insert($0); return true },
+            unhide: { hidden.remove($0); return true }
+        )
+        XCTAssertEqual(hidden, ["reader"])
+        XCTAssertFalse(tracker.isHiddenBySwitch("spotify"))
+        XCTAssertFalse(tracker.isHiddenBySwitch("discord"))
+        XCTAssertTrue(tracker.isHiddenBySwitch("reader"))
+    }
 }

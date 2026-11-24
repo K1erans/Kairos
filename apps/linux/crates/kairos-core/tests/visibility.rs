@@ -148,3 +148,64 @@ fn is_hidden_by_switch_tracks_only_kairos_hidden_apps() {
     tracker.did_hide(&notes_key, &mut |_| true);
     assert!(!tracker.is_hidden_by_switch(&notes_key));
 }
+
+#[test]
+fn switching_to_study_and_back_to_personal_restores_ungrouped_open_apps() {
+    let mut study = AppGroup::new("Study");
+    study.dock_apps = vec!["reader.desktop".into()];
+    let mut personal = AppGroup::new("Personal");
+    personal.dock_apps = vec!["discord.desktop".into()];
+
+    let mut tracker = GroupVisibilityTracker::<String>::new();
+    let to_study = GroupSwitch::with_other_groups(Some(&study), SwitchBehavior::Hide, personal.dock_apps.iter().cloned().collect());
+    let to_personal = GroupSwitch::with_other_groups(Some(&personal), SwitchBehavior::Hide, study.dock_apps.iter().cloned().collect());
+
+    let hidden = RefCell::new( std::collections::HashSet::<String>::new());
+    let apps_in_personal = vec![
+        VisibilityApp { app: "discord".into(), app_id: Some("discord.desktop"), is_hidden: false },
+        VisibilityApp { app: "spotify".into(), app_id: Some("spotify.desktop"), is_hidden: false },
+        VisibilityApp { app: "reader".into(), app_id: Some("reader.desktop"), is_hidden: false },
+    ];
+    tracker.apply_from(
+        &to_study,
+        Some(personal.id),
+        &apps_in_personal,
+        &mut |a| {
+            hidden.borrow_mut().insert(a.clone());
+            true
+        },
+        &mut |a| {
+            hidden.borrow_mut().remove(a);
+            true
+        },
+    );
+    assert!(hidden.borrow().contains("discord"));
+    assert!(hidden.borrow().contains("spotify"));
+    assert!(!hidden.borrow().contains("reader"));
+    assert!(tracker.is_hidden_by_switch(&"spotify".to_string()));
+
+    let apps_in_study = vec![
+        VisibilityApp { app: "discord".into(), app_id: Some("discord.desktop"), is_hidden: true },
+        VisibilityApp { app: "spotify".into(), app_id: Some("spotify.desktop"), is_hidden: true },
+        VisibilityApp { app: "reader".into(), app_id: Some("reader.desktop"), is_hidden: false },
+    ];
+    tracker.apply_from(
+        &to_personal,
+        Some(study.id),
+        &apps_in_study,
+        &mut |a| {
+            hidden.borrow_mut().insert(a.clone());
+            true
+        },
+        &mut |a| {
+            hidden.borrow_mut().remove(a);
+            true
+        },
+    );
+    assert!(!hidden.borrow().contains("discord"));
+    assert!(!hidden.borrow().contains("spotify"));
+    assert!(hidden.borrow().contains("reader"));
+    assert!(!tracker.is_hidden_by_switch(&"spotify".to_string()));
+    assert!(!tracker.is_hidden_by_switch(&"discord".to_string()));
+    assert!(tracker.is_hidden_by_switch(&"reader".to_string()));
+}

@@ -454,7 +454,7 @@ impl Model {
         }
         if self.guards_apps.get() {
             if before.active_group != group {
-                self.apply_visibility();
+                self.apply_visibility(before.active_group);
                 self.sweep_soon();
             } else if before.switch_behavior != SwitchBehavior::Leave && behavior == SwitchBehavior::Leave {
                 self.restore_visibility();
@@ -1213,14 +1213,24 @@ impl Model {
         list.iter().find(|a| a.key() == key).map(|a| self.apps.unhide(a)).unwrap_or(false)
     }
 
-    fn apply_visibility(self: &Rc<Self>) {
+    fn apply_visibility(self: &Rc<Self>, from_group: Option<Id>) {
         let list = self.apps.running();
         let policy = {
             let s = self.s();
-            GroupSwitch::new(s.active_group(), s.data.active_switch_behavior())
+            let active_id = s.active_group().map(|g| g.id);
+            let other_group_apps: HashSet<String> = s
+                .data
+                .groups
+                .iter()
+                .filter(|g| Some(g.id) != active_id)
+                .flat_map(|g| g.dock_apps.iter().cloned())
+                .collect();
+            GroupSwitch::with_other_groups(s.active_group(), s.data.active_switch_behavior(), other_group_apps)
         };
         let entries: Vec<VisibilityApp<String>> = list.iter().map(|a| VisibilityApp { app: a.key(), app_id: Some(a.id.as_str()), is_hidden: a.hidden }).collect();
-        self.visibility.borrow_mut().apply(&policy, &entries, &mut |k| self.hide_key(&list, k), &mut |k| self.unhide_key(&list, k));
+        self.visibility
+            .borrow_mut()
+            .apply_from(&policy, from_group, &entries, &mut |k| self.hide_key(&list, k), &mut |k| self.unhide_key(&list, k));
         let hidden = self.hidden_by_switch_ids(&list);
         self.state.borrow_mut().hidden_by_switch = hidden;
     }

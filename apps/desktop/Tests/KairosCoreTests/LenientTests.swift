@@ -9,7 +9,7 @@ final class LenientTests: XCTestCase {
         var group = AppGroup(name: "Work", icon: "book.fill", colorHex: "#123456")
         group.dockApps = ["a"]; group.blockedApps = ["b"]; group.allowSites = ["c.com"]; group.blockSites = ["d.com"]
         group.hiddenElements = ["e.com": ["#x"]]; group.jevEnabled = false; group.jevThreshold = 0.4
-        group.tempoPreset = "Sprint"; group.desktop = 2
+        group.tempoPreset = "Sprint"; group.desktop = 2; group.switchBehavior = .leave
         var task = TaskItem(title: "Write", groupId: UUID())
         task.notes = "n"; task.priority = 2; task.due = t; task.estimateMin = 30; task.status = .done
         task.parentId = UUID(); task.createdAt = t; task.completedAt = t; task.listenedSec = 9

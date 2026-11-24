@@ -85,15 +85,16 @@ impl DockGeometry {
 
     /// Kairos itself comes first, then the groups. `running` is the open apps in launch order,
     /// and `hidden` are the apps Kairos hid on a group switch. Open apps not pinned to the active
-    /// group follow the pinned ones after a separator, excluding apps hidden by a group switch
-    /// and (when hiding other apps on switch) apps that belong to another group — so apps not in
-    /// any group always show on the bar. Downloads and Trash come last, after another separator,
-    /// unless turned off in Settings.
+    /// group follow the pinned ones after a separator, excluding blocked apps hidden by a group
+    /// switch and (when hiding other apps on switch) apps that belong to another group — so apps
+    /// not in any group always show on the bar. Downloads and Trash come last, after another
+    /// separator, unless turned off in Settings.
     pub fn slots_for(data: &AppData, running: &[String], hidden: &HashSet<String>) -> Vec<Slot> {
         let apps: Vec<String> = data.active_group().map(|g| g.dock_apps.clone()).unwrap_or_default();
         let mut seen: HashSet<String> = apps.iter().cloned().collect();
         let active_id = data.active_group().map(|g| g.id);
-        let hides_other_groups = active_id.is_some() && data.active_switch_behavior() == SwitchBehavior::Hide;
+        let behavior = data.active_switch_behavior();
+        let hides_other_groups = active_id.is_some() && behavior == SwitchBehavior::Hide;
         let other_group_apps: HashSet<&str> = if hides_other_groups {
             data.groups
                 .iter()
@@ -103,9 +104,20 @@ impl DockGeometry {
         } else {
             HashSet::new()
         };
+        let blocked_apps: HashSet<&str> = if behavior == SwitchBehavior::HideBlocked {
+            data.active_group()
+                .map(|g| g.blocked_apps.iter().map(String::as_str).collect())
+                .unwrap_or_default()
+        } else {
+            HashSet::new()
+        };
         let extra: Vec<String> = running
             .iter()
-            .filter(|r| !hidden.contains(*r) && !other_group_apps.contains(r.as_str()) && seen.insert((*r).clone()))
+            .filter(|r| {
+                !other_group_apps.contains(r.as_str())
+                    && !(blocked_apps.contains(r.as_str()) && hidden.contains(*r))
+                    && seen.insert((*r).clone())
+            })
             .cloned()
             .collect();
         let mut slots = vec![Slot::Kairos, Slot::Separator];

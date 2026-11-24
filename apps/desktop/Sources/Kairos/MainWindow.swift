@@ -268,7 +268,7 @@ struct AppPicker: View {
             List(matches) { app in
                 Toggle(isOn: picked(app)) {
                     HStack {
-                        Image(nsImage: NSWorkspace.shared.icon(forFile: app.url.path)).resizable().frame(width: 26, height: 26)
+                        Image(nsImage: Apps.icon(app.bundleId)).resizable().frame(width: 26, height: 26)
                         Text(app.name)
                     }
                 }
@@ -656,6 +656,12 @@ struct GroupDetail: View {
                         Text("Needs the Accessibility permission (Settings > Blocking) and \u{201C}Switch to Desktop \(g.wrappedValue.desktop)\u{201D} turned on in System Settings > Keyboard > Keyboard Shortcuts > Mission Control.")
                             .font(.callout).foregroundStyle(.secondary)
                     }
+                    Picker("Other apps", selection: g.switchBehavior) {
+                        Text("As in Settings (\(model.data.settings.switchBehavior.label.lowercased()))").tag(SwitchBehavior?.none)
+                        ForEach(SwitchBehavior.allCases, id: \.self) { Text($0.label).tag(Optional($0)) }
+                    }
+                    Text("What switching to \(g.wrappedValue.name) does to the windows of other apps.")
+                        .font(.callout).foregroundStyle(.secondary)
                 }
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Colour").font(.headline)
@@ -914,6 +920,8 @@ struct SettingsPage: View {
                     Text("Switching to a group hides its blocked apps, even with the timer off. Choose them under Rules > Blocked apps. Kairos restores their windows when you switch to a group that allows them.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
+                Text("A group can choose differently under Groups > Other apps.")
+                    .font(.caption).foregroundStyle(.secondary)
                 Picker("Quick add", selection: $model.data.settings.quickAddHotkey) {
                     ForEach(Hotkeys.quickAdd) { Text($0.label).tag($0.id) }
                     Text("Off").tag(Hotkeys.off)

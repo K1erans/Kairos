@@ -96,7 +96,7 @@ enum Folders {
         // Kairos Bar redraws on every pointer move, so look the icon up once.
         if let i = downloadsIcon { return i }
         guard let u = url(folder) else { return NSImage() }
-        let i = NSWorkspace.shared.icon(forFile: u.path)
+        let i = Apps.icon(forFile: u.path)
         downloadsIcon = i
         return i
     }
@@ -136,9 +136,32 @@ enum Apps {
         guard let u = url(bundleId) else {
             return NSImage(systemSymbolName: "questionmark.app.dashed", accessibilityDescription: nil) ?? NSImage()
         }
-        let i = NSWorkspace.shared.icon(forFile: u.path)
+        let i = icon(forFile: u.path)
         icons[bundleId] = i
         return i
+    }
+
+    /// Rasterizes the bundle's icon at 256×256 pixels so 1x displays never select IconServices'
+    /// small 1x representations, which wrap apps without an asset catalog in a grey plaque.
+    static func icon(forFile path: String) -> NSImage {
+        let source = NSWorkspace.shared.icon(forFile: path)
+        let px = 256
+        guard let rep = NSBitmapImageRep(
+            bitmapDataPlanes: nil, pixelsWide: px, pixelsHigh: px,
+            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+            colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0
+        ), let ctx = NSGraphicsContext(bitmapImageRep: rep) else {
+            return source
+        }
+        rep.size = NSSize(width: px, height: px)
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = ctx
+        ctx.imageInterpolation = .high
+        source.draw(in: NSRect(x: 0, y: 0, width: px, height: px), from: .zero, operation: .copy, fraction: 1)
+        NSGraphicsContext.restoreGraphicsState()
+        let image = NSImage(size: NSSize(width: px, height: px))
+        image.addRepresentation(rep)
+        return image
     }
 
     static func running(_ bundleId: String) -> NSRunningApplication? {

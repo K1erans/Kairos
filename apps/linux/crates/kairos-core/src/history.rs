@@ -148,8 +148,10 @@ pub enum SwitchAction {
 /// Window visibility when entering a group. Only apps Kairos hid for a group switch can be restored.
 #[derive(Clone, Debug)]
 pub struct GroupSwitch {
+    pub group_id: Option<Id>,
     behavior: SwitchBehavior,
     apps: HashSet<String>,
+    other_group_apps: HashSet<String>,
 }
 
 /// The file manager stays available, as Finder does on the Mac.
@@ -157,6 +159,10 @@ pub const FILE_MANAGERS: &[&str] = &["nemo.desktop", "org.gnome.Nautilus.desktop
 
 impl GroupSwitch {
     pub fn new(group: Option<&AppGroup>, behavior: SwitchBehavior) -> Self {
+        Self::with_other_groups(group, behavior, HashSet::new())
+    }
+
+    pub fn with_other_groups(group: Option<&AppGroup>, behavior: SwitchBehavior, other_group_apps: HashSet<String>) -> Self {
         let apps = match group {
             None => HashSet::new(),
             Some(g) => {
@@ -164,15 +170,25 @@ impl GroupSwitch {
                 list.iter().cloned().collect()
             }
         };
-        GroupSwitch { behavior: if group.is_none() { SwitchBehavior::Leave } else { behavior }, apps }
+        GroupSwitch {
+            group_id: group.map(|g| g.id),
+            behavior: if group.is_none() { SwitchBehavior::Leave } else { behavior },
+            apps,
+            other_group_apps,
+        }
     }
 
     pub fn action(&self, app: Option<&str>, is_hidden: bool, hidden_by_switch: bool) -> Option<SwitchAction> {
+        self.action_from(app, is_hidden, hidden_by_switch, false)
+    }
+
+    pub fn action_from(&self, app: Option<&str>, is_hidden: bool, hidden_by_switch: bool, hidden_from_destination: bool) -> Option<SwitchAction> {
         let listed = app.map(|a| self.apps.contains(a)).unwrap_or(false);
+        let in_other_group = app.map(|a| self.other_group_apps.contains(a)).unwrap_or(false);
         let should_hide = match self.behavior {
             SwitchBehavior::Leave => false,
             SwitchBehavior::HideBlocked => listed,
-            SwitchBehavior::Hide => !listed,
+            SwitchBehavior::Hide => !listed && !(hidden_from_destination && !in_other_group),
         };
         if should_hide && !app.map(|a| FILE_MANAGERS.contains(&a)).unwrap_or(false) {
             return if is_hidden { None } else { Some(SwitchAction::Hide) };

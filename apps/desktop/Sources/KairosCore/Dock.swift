@@ -44,17 +44,22 @@ public struct DockGeometry: Equatable, Sendable {
 
     /// `running` is the open apps in launch order, and `hidden` are the apps Kairos hid on a
     /// group switch. Open apps that are not pinned to the active group follow the pinned ones
-    /// after a separator, excluding apps hidden by a group switch and (when hiding other apps on
-    /// switch) apps that belong to another group — so apps not in any group always show on the bar.
+    /// after a separator, excluding blocked apps hidden by a group switch and (when hiding other
+    /// apps on switch) apps that belong to another group — so apps not in any group always show
+    /// on the bar.
     /// Downloads and Trash come last, after another separator, unless turned off in Settings.
     public static func slots(for data: AppData, running: [String] = [], hidden: Set<String> = []) -> [Slot] {
         let apps = data.activeGroup?.dockApps ?? []
         var seen = Set(apps)
-        let hidesOtherGroups = data.activeGroup != nil && data.settings.switchBehavior == .hide
+        let behavior = data.activeSwitchBehavior
+        let hidesOtherGroups = data.activeGroup != nil && behavior == .hide
         let otherGroupApps: Set<String> = hidesOtherGroups
             ? Set(data.groups.filter { $0.id != data.activeGroup?.id }.flatMap(\.dockApps))
             : []
-        let extra = running.filter { !hidden.contains($0) && !otherGroupApps.contains($0) && seen.insert($0).inserted }
+        let hiddenBlocked: Set<String> = behavior == .hideBlocked
+            ? hidden.intersection(data.activeGroup?.blockedApps ?? [])
+            : []
+        let extra = running.filter { !otherGroupApps.contains($0) && !hiddenBlocked.contains($0) && seen.insert($0).inserted }
         let folders: [Slot] = data.settings.showsDockFolders ? [.separator] + DockFolder.allCases.map { .folder($0) } : []
         return data.groups.map { .group($0.id) } + [.newGroup, .divider] + (apps.isEmpty ? [.addApp] : apps.map { .app($0) })
             + (extra.isEmpty ? [] : [.separator] + extra.map { .running($0) }) + folders

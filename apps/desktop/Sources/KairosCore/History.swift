@@ -109,21 +109,26 @@ extension AppData {
 public struct GroupSwitch {
     public enum Action { case hide, unhide }
 
+    public let groupId: UUID?
     private let behavior: SwitchBehavior
     private let apps: Set<String>
+    private let otherGroupApps: Set<String>
 
-    public init(to group: AppGroup?, behavior: SwitchBehavior) {
+    public init(to group: AppGroup?, behavior: SwitchBehavior, otherGroupApps: Set<String> = []) {
+        groupId = group?.id
         self.behavior = group == nil ? .leave : behavior
         apps = Set((behavior == .hideBlocked ? group?.blockedApps : group?.dockApps) ?? [])
+        self.otherGroupApps = otherGroupApps
     }
 
-    public func action(for bundleId: String?, isHidden: Bool, hiddenBySwitch: Bool) -> Action? {
+    public func action(for bundleId: String?, isHidden: Bool, hiddenBySwitch: Bool, hiddenFromDestination: Bool = false) -> Action? {
         let listed = bundleId.map(apps.contains) ?? false
+        let inOtherGroup = bundleId.map(otherGroupApps.contains) ?? false
         let shouldHide: Bool
         switch behavior {
         case .leave: shouldHide = false
         case .hideBlocked: shouldHide = listed
-        case .hide: shouldHide = !listed
+        case .hide: shouldHide = !listed && !(hiddenFromDestination && !inOtherGroup)
         }
         if shouldHide && bundleId != "com.apple.finder" { return isHidden ? nil : .hide }
         return hiddenBySwitch ? .unhide : nil

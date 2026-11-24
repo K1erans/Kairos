@@ -3,6 +3,7 @@
 //! late hide/unhide notifications without wall-clock timeouts.
 
 use crate::history::{GroupSwitch, SwitchAction};
+use crate::id::Id;
 use std::collections::HashMap;
 use std::hash::Hash;
 
@@ -25,11 +26,12 @@ pub struct VisibilityApp<'a, A> {
 #[derive(Clone, Debug, Default)]
 pub struct GroupVisibilityTracker<A: Hash + Eq + Clone> {
     pub ownership: HashMap<A, Ownership>,
+    pub hidden_from: HashMap<A, Id>,
 }
 
 impl<A: Hash + Eq + Clone> GroupVisibilityTracker<A> {
     pub fn new() -> Self {
-        GroupVisibilityTracker { ownership: HashMap::new() }
+        GroupVisibilityTracker { ownership: HashMap::new(), hidden_from: HashMap::new() }
     }
 
     /// Whether Kairos currently hides (or is hiding) this app for a group switch.
@@ -38,13 +40,31 @@ impl<A: Hash + Eq + Clone> GroupVisibilityTracker<A> {
     }
 
     pub fn apply(&mut self, policy: &GroupSwitch, apps: &[VisibilityApp<A>], hide: &mut dyn FnMut(&A) -> bool, unhide: &mut dyn FnMut(&A) -> bool) {
+        self.apply_from(policy, None, apps, hide, unhide);
+    }
+
+    pub fn apply_from(
+        &mut self,
+        policy: &GroupSwitch,
+        from_group: Option<Id>,
+        apps: &[VisibilityApp<A>],
+        hide: &mut dyn FnMut(&A) -> bool,
+        unhide: &mut dyn FnMut(&A) -> bool,
+    ) {
         let live: std::collections::HashSet<&A> = apps.iter().map(|a| &a.app).collect();
         self.ownership.retain(|k, _| live.contains(k));
+        self.hidden_from.retain(|k, _| live.contains(k));
         let mut to_restore: Vec<(A, bool)> = vec![];
         for entry in apps {
             let owned = self.ownership.contains_key(&entry.app);
-            match policy.action(entry.app_id, entry.is_hidden, owned) {
+            let from_dest = policy.group_id.is_some() && self.hidden_from.get(&entry.app).copied() == policy.group_id;
+            match policy.action_from(entry.app_id, entry.is_hidden, owned, from_dest) {
                 Some(SwitchAction::Hide) => {
+                    if !self.hidden_from.contains_key(&entry.app) {
+                        if let Some(from) = from_group {
+                            self.hidden_from.insert(entry.app.clone(), from);
+                        }
+                    }
                     let state = if hide(&entry.app) { Ownership::Hidden } else { Ownership::HideRequested };
                     self.ownership.insert(entry.app.clone(), state);
                 }
@@ -73,6 +93,7 @@ impl<A: Hash + Eq + Clone> GroupVisibilityTracker<A> {
             Some(Ownership::RestoreRequested) => {
                 if unhide(app) {
                     self.ownership.remove(app);
+                    self.hidden_from.remove(app);
                 } else {
                     self.ownership.insert(app.clone(), Ownership::Hidden);
                 }
@@ -87,11 +108,13 @@ impl<A: Hash + Eq + Clone> GroupVisibilityTracker<A> {
         }
         if matches!(self.ownership.get(app), Some(Ownership::Hidden) | Some(Ownership::RestoreRequested)) {
             self.ownership.remove(app);
+            self.hidden_from.remove(app);
         }
     }
 
     pub fn did_terminate(&mut self, app: &A) {
         self.ownership.remove(app);
+        self.hidden_from.remove(app);
     }
 
     /// Restores all apps Kairos owns (on shutdown or when hiding is turned off).
@@ -109,6 +132,7 @@ impl<A: Hash + Eq + Clone> GroupVisibilityTracker<A> {
                 if is_hidden {
                     if unhide(app) {
                         self.ownership.remove(app);
+                        self.hidden_from.remove(app);
                     } else {
                         self.ownership.insert(app.clone(), Ownership::RestoreRequested);
                     }
@@ -121,11 +145,13 @@ impl<A: Hash + Eq + Clone> GroupVisibilityTracker<A> {
                 if is_hidden {
                     if unhide(app) {
                         self.ownership.remove(app);
+                        self.hidden_from.remove(app);
                     } else {
                         self.ownership.insert(app.clone(), Ownership::RestoreRequested);
                     }
                 } else {
                     self.ownership.remove(app);
+                    self.hidden_from.remove(app);
                 }
             }
             None => {}

@@ -6,11 +6,11 @@ import KairosCore
 struct GroupAppVisibility {
     private var tracker = GroupVisibilityTracker<NSRunningApplication>()
 
-    mutating func apply(_ policy: GroupSwitch, to apps: [NSRunningApplication]) {
+    mutating func apply(_ policy: GroupSwitch, fromGroup: UUID? = nil, to apps: [NSRunningApplication]) {
         let regular = apps
             .filter { $0.activationPolicy == .regular && $0 != .current }
             .map { (app: $0, bundleId: $0.bundleIdentifier, isHidden: $0.isHidden) }
-        tracker.apply(policy, to: regular, hide: { $0.hide() }, unhide: { $0.unhide() })
+        tracker.apply(policy, fromGroup: fromGroup, to: regular, hide: { $0.hide() }, unhide: { $0.unhide() })
     }
 
     mutating func didHide(_ app: NSRunningApplication) {

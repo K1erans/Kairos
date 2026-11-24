@@ -46,6 +46,8 @@ public struct AppGroup: Codable, Identifiable, Hashable, Sendable {
     public var tempoPreset: String = "Classic"
     /// Mission Control desktop (1-9) to switch to with this group. 0 leaves the desktop alone.
     public var desktop: Int = 0
+    /// What switching to this group does to other apps. Nil follows Settings.
+    public var switchBehavior: SwitchBehavior?
 
     public init(name: String, icon: String = "square.grid.2x2", colorHex: String = "#4F7CFF") {
         self.name = name
@@ -73,6 +75,7 @@ extension AppGroup: Lenient {
         .field("dockApps", \.dockApps), .field("blockedApps", \.blockedApps), .field("allowSites", \.allowSites),
         .field("blockSites", \.blockSites), .field("hiddenElements", \.hiddenElements), .field("jevEnabled", \.jevEnabled),
         .field("jevThreshold", \.jevThreshold), .field("tempoPreset", \.tempoPreset), .field("desktop", \.desktop),
+        .field("switchBehavior", \.switchBehavior),
     ]
 }
 
@@ -374,6 +377,9 @@ public struct AppData: Codable, Sendable {
 
     public func group(_ id: UUID?) -> AppGroup? { groups.first { $0.id == id } }
     public var activeGroup: AppGroup? { group(focus.activeGroupId) ?? groups.first }
+    /// What switching to the active group does to other apps: the group's own choice, or
+    /// Settings' when it has none.
+    public var activeSwitchBehavior: SwitchBehavior { activeGroup?.switchBehavior ?? settings.switchBehavior }
     public var currentTask: TaskItem? { tasks.first { $0.id == focus.currentTaskId } }
     public func preset(named name: String) -> TempoPreset {
         settings.presets.first { $0.name == name } ?? settings.presets.first ?? TempoPreset.defaults[0]

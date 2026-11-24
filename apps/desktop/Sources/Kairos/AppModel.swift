@@ -198,11 +198,12 @@ final class AppModel: ObservableObject {
         if old.focus.mode != data.focus.mode { modeChanged(from: old.focus.mode, to: data.focus.mode) }
         if guardsApps {
             if old.activeGroup?.id != activeGroup?.id {
-                let policy = GroupSwitch(to: activeGroup, behavior: data.settings.switchBehavior)
-                groupAppVisibility.apply(policy, to: NSWorkspace.shared.runningApplications)
+                let otherGroupApps = Set(data.groups.filter { $0.id != activeGroup?.id }.flatMap(\.dockApps))
+                let policy = GroupSwitch(to: activeGroup, behavior: data.activeSwitchBehavior, otherGroupApps: otherGroupApps)
+                groupAppVisibility.apply(policy, fromGroup: old.activeGroup?.id, to: NSWorkspace.shared.runningApplications)
                 refreshRunning()
                 sweepSoon()
-            } else if old.settings.switchBehavior != .leave, data.settings.switchBehavior == .leave {
+            } else if old.activeSwitchBehavior != .leave, data.activeSwitchBehavior == .leave {
                 groupAppVisibility.restore()
                 refreshRunning()
                 sweepSoon()
